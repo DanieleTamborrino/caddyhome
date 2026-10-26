@@ -1,0 +1,22 @@
+name: GHCR Prune Untagged Images
+
+on:
+  schedule:
+    - cron: '0 2 * * 0' # Run every Sunday at 2 AM
+  workflow_dispatch:
+
+jobs:
+  clean-ghcr:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Delete untagged containers (caddyhome)
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: 'caddyhome'
+          package-type: 'container'
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 0

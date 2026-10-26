@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CaddyHome</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+
+    :root,
+    [data-theme="dark"] {
+      --bg-page: #020617;
+      --bg-page-rgb: 2, 6, 23;
+      --bg-surface: rgba(15, 23, 42, 0.82);
+      --bg-card: rgba(15, 23, 42, 0.78);
+      --bg-card-hover: rgba(30, 41, 59, 0.92);
+      --border-card: rgba(51, 65, 85, 0.65);
+      --border-hover: rgba(56, 189, 248, 0.55);
+      --text-primary: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+    }
+
+    [data-theme="light"] {
+      --bg-page: #f1f5f9;
+      --bg-page-rgb: 241, 245, 249;
+      --bg-surface: rgba(255, 255, 255, 0.88);
+      --bg-card: rgba(255, 255, 255, 0.85);
+      --bg-card-hover: rgba(248, 250, 252, 0.98);
+      --border-card: rgba(203, 213, 225, 0.9);
+      --border-hover: rgba(2, 132, 199, 0.65);
+      --text-primary: #0f172a;
+      --text-muted: #64748b;
+      --accent: #0284c7;
+      --accent-soft: rgba(2, 132, 199, 0.12);
+    }
+
+    [data-theme="oled"] {
+      --bg-page: #000000;
+      --bg-page-rgb: 0, 0, 0;
+      --bg-surface: rgba(10, 10, 10, 0.88);
+      --bg-card: rgba(12, 12, 14, 0.88);
+      --bg-card-hover: rgba(24, 24, 27, 0.96);
+      --border-card: rgba(39, 39, 42, 0.85);
+      --border-hover: rgba(34, 211, 238, 0.6);
+      --text-primary: #fafafa;
+      --text-muted: #a1a1aa;
+      --accent: #22d3ee;
+      --accent-soft: rgba(34, 211, 238, 0.14);
+    }
+
+    [data-theme="nord"] {
+      --bg-page: #2e3440;
+      --bg-page-rgb: 46, 52, 64;
+      --bg-surface: rgba(59, 66, 82, 0.86);
+      --bg-card: rgba(59, 66, 82, 0.82);
+      --bg-card-hover: rgba(67, 76, 94, 0.95);
+      --border-card: rgba(76, 86, 106, 0.85);
+      --border-hover: rgba(136, 192, 208, 0.65);
+      --text-primary: #eceff4;
+      --text-muted: #d8dee9;
+      --accent: #88c0d0;
+      --accent-soft: rgba(136, 192, 208, 0.16);
+    }
+
+    [data-theme="catppuccin"] {
+      --bg-page: #1e1e2e;
+      --bg-page-rgb: 30, 30, 46;
+      --bg-surface: rgba(24, 24, 37, 0.86);
+      --bg-card: rgba(49, 50, 68, 0.78);
+      --bg-card-hover: rgba(69, 71, 90, 0.92);
+      --border-card: rgba(88, 91, 112, 0.65);
+      --border-hover: rgba(203, 166, 247, 0.65);
+      --text-primary: #cdd6f4;
+      --text-muted: #a6adc8;
+      --accent: #cba6f7;
+      --accent-soft: rgba(203, 166, 247, 0.16);
+    }
+
+    body {
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .theme-surface {
+      background-color: var(--bg-surface);
+      border-color: var(--border-card);
+      backdrop-filter: blur(12px);
+    }
+
+    .theme-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-card);
+      backdrop-filter: blur(10px);
+      transition: transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .theme-card:hover {
+      background-color: var(--bg-card-hover);
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+    }
+
+    .theme-muted {
+      color: var(--text-muted);
+    }
+
+    .theme-accent-badge {
+      background-color: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--border-hover);
+    }
+
+    .sortable-ghost {
+      opacity: 0.35;
+      border: 2px dashed var(--accent) !important;
+    }
+  </style>
+</head>
+<body class="min-h-screen antialiased selection:bg-sky-500 selection:text-white" x-data="caddyHomeApp()" x-init="init()">
+
+  <!-- Custom Wallpaper Layer -->
+  <template x-if="state.settings.background_image">
+    <div class="fixed inset-0 z-0 pointer-events-none">
+      <div class="absolute inset-0 bg-cover bg-center bg-no-repeat"
+           :style="`background-image: url('${state.settings.background_image}')`"></div>
+      <div class="absolute inset-0"
+           :style="`background-color: rgba(var(--bg-page-rgb), ${state.settings.background_overlay_opacity ?? 0.75})`"></div>
+    </div>
+  </template>
+
+  <!-- Main Content Wrapper -->
+  <div class="relative z-10 min-h-screen flex flex-col">
+
+    <!-- Top Navigation Bar -->
+    <header class="sticky top-0 z-30 border-b theme-surface">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+
+        <!-- Brand & Active Count -->
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center theme-accent-badge font-bold text-lg shadow-sm">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-lg font-bold tracking-tight" x-text="state.settings.title || 'CaddyHome'"></h1>
+              <span class="text-xs px-2 py-0.5 rounded-full font-medium theme-accent-badge"
+                    x-text="`${activeServiceCount()} attivi`"></span>
+            </div>
+            <p class="text-xs theme-muted hidden sm:block">
+              <span x-show="!lanMode">Click principale: <strong>HTTPS Esterno</strong></span>
+              <span x-show="lanMode" class="text-amber-400 font-medium">Modalità click: <strong>IP LAN Diretto</strong></span>
+            </p>
+          </div>
+        </div>
+
+        <!-- Instant Search Bar -->
+        <div class="flex-1 max-w-md mx-auto w-full order-3 md:order-2">
+          <div class="relative">
+            <svg class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 theme-muted pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+            </svg>
+            <input
+              x-ref="searchInput"
+              x-model="searchQuery"
+              @keydown.escape="searchQuery = ''; $el.blur()"
+              type="text"
+              placeholder="Cerca servizio, dominio o IP:Porta... (premi /)"
+              class="w-full pl-10 pr-10 py-1.5 text-sm rounded-xl border bg-black/20 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
+              style="border-color: var(--border-card); color: var(--text-primary);"
+            />
+            <button x-show="searchQuery" @click="searchQuery = ''" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs theme-muted hover: opacity-80">
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <!-- Right Controls -->
+        <div class="flex items-center gap-2 order-2 md:order-3">
+
+          <!-- Global LAN Mode Toggle -->
+          <button
+            @click="toggleLanMode()"
+            :class="lanMode ? 'bg-amber-500/20 border-amber-500/60 text-amber-300' : 'border-slate-700/70 opacity-85 hover:opacity-100'"
+            class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition"
+            title="Commuta click principale tra dominio HTTPS esterno e IP LAN diretto">
+            <span class="w-2 h-2 rounded-full" :class="lanMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'"></span>
+            <span x-text="lanMode ? 'LAN ON' : 'HTTPS'"></span>
+          </button>
+
+          <!-- Theme & Appearance Button -->
+          <button
+            @click="openAppearanceModal()"
+            class="p-2 rounded-xl border hover:opacity-90 transition"
+            style="border-color: var(--border-card);"
+            title="Tema, Sfondo e Impostazioni">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/>
+            </svg>
+          </button>
+
+          <!-- Sync Button -->
+          <button
+            @click="syncNow()"
+            :disabled="syncing"
+            class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 hover:opacity-90 transition disabled:opacity-50"
+            style="border-color: var(--border-card);"
+            title="Sincronizza ora con Caddy">
+            <svg class="w-4 h-4" :class="syncing ? 'animate-spin text-sky-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span class="hidden sm:inline">Sync</span>
+          </button>
+
+          <!-- Edit / Save Layout Button -->
+          <button
+            @click="toggleEditMode()"
+            :class="editMode ? 'bg-emerald-500 text-slate-950 font-semibold border-emerald-400' : 'border-slate-700/70'"
+            class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition"
+            style="border-color: var(--border-card);">
+            <svg x-show="!editMode" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+            </svg>
+            <svg x-show="editMode" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span x-text="editMode ? 'Salva' : 'Modifica'"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Edit Mode Sub-Toolbar -->
+      <div x-show="editMode" x-cloak class="border-t bg-sky-500/10 px-4 sm:px-6 lg:px-8 py-2" style="border-color: var(--border-card);">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-sky-400">Modalità Modifica attiva:</span>
+            <span class="theme-muted">Trascina le card o le categorie per riordinarle, oppure clicca una card per modificarla.</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              @click="showHidden = !showHidden"
+              class="px-2.5 py-1 rounded-lg border transition"
+              :class="showHidden ? 'bg-amber-500/20 border-amber-400 text-amber-300' : 'opacity-75'"
+              style="border-color: var(--border-card);">
+              <span x-text="showHidden ? 'Nascondi servizi occultati' : 'Mostra servizi nascosti (' + hiddenServiceCount() + ')'"></span>
+            </button>
+            <button
+              @click="openCategoryModal()"
+              class="px-2.5 py-1 rounded-lg bg-sky-500 text-slate-950 font-semibold hover:bg-sky-400 transition">
+              + Nuova Categoria
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+      <!-- Toast Notification -->
+      <div x-show="toastMessage" x-cloak
+           x-transition
+           class="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-medium theme-surface flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+        <span x-text="toastMessage"></span>
+      </div>
+
+      <!-- Empty State -->
+      <template x-if="Object.keys(state.services || {}).length === 0">
+        <div class="text-center py-20 rounded-2xl border theme-card max-w-lg mx-auto p-8">
+          <div class="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center theme-accent-badge">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/>
+            </svg>
+          </div>
+          <h2 class="text-base font-semibold mb-1">Nessun servizio rilevato</h2>
+          <p class="text-xs theme-muted mb-5">
+            Verifica che il percorso del <code>Caddyfile</code> o l'URL della Caddy Admin API siano raggiungibili, quindi avvia una sincronizzazione.
+          </p>
+          <button @click="syncNow()" class="px-4 py-2 rounded-xl bg-sky-500 text-slate-950 text-xs font-semibold hover:bg-sky-400 transition">
+            Esegui Sync Ora
+          </button>
+        </div>
+      </template>
+
+      <!-- Categories Container (Sortable in Edit Mode) -->
+      <div id="categories-root" class="space-y-8">
+        <template x-for="cat in sortedCategories()" :key="cat.id">
+          <section
+            :data-category-id="cat.id"
+            x-show="editMode || servicesForCategory(cat.id).length > 0"
+            class="space-y-3">
+
+            <!-- Category Header -->
+            <div class="flex items-center justify-between border-b pb-2" style="border-color: var(--border-card);">
+              <div class="flex items-center gap-2">
+                <span x-show="editMode" class="cat-drag-handle cursor-grab active:cursor-grabbing p-1 rounded hover:bg-white/10 theme-muted" title="Trascina categoria">
+                  ⋮⋮
+                </span>
+                <h2 class="text-sm font-semibold uppercase tracking-wider theme-muted" x-text="cat.name"></h2>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-white/5 theme-muted"
+                      x-text="servicesForCategory(cat.id).length"></span>
+              </div>
+
+              <!-- Category Edit Actions -->
+              <div x-show="editMode" class="flex items-center gap-1.5">
+                <button
+                  @click="openCategoryModal(cat)"
+                  class="text-xs px-2 py-1 rounded-lg border hover:bg-white/5 theme-muted"
+                  style="border-color: var(--border-card);">
+                  Rinomina
+                </button>
+                <button
+                  x-show="cat.id !== 'cat_uncat'"
+                  @click="deleteCategory(cat.id)"
+                  class="text-xs px-2 py-1 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10">
+                  Elimina
+                </button>
+              </div>
+            </div>
+
+            <!-- Category Cards Grid -->
+            <div
+              class="service-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 min-h-[56px]"
+              :class="editMode ? 'p-2 rounded-2xl border border-dashed border-slate-700/60' : ''"
+              :data-category-id="cat.id">
+
+              <template x-for="svc in servicesForCategory(cat.id)" :key="svc.domain">
+                <div
+                  :data-domain="svc.domain"
+                  @click="handleCardClick(svc)"
+                  :class="[
+                    svc.hidden ? 'opacity-50 ring-1 ring-amber-400/50' : '',
+                    editMode ? 'cursor-move' : 'cursor-pointer'
+                  ]"
+                  class="theme-card rounded-2xl p-4 flex flex-col justify-between gap-3 group relative">
+
+                  <!-- Top Row: Icon + Name + Domain + Edit Button -->
+                  <div class="flex items-start gap-3.5">
+                    <div class="w-11 h-11 rounded-xl bg-black/20 border flex items-center justify-center shrink-0 overflow-hidden p-1.5"
+                         style="border-color: var(--border-card);">
+                      <img
+                        :src="getIconUrl(svc)"
+                        @error="handleIconError($event, svc)"
+                        :alt="svc.custom_name"
+                        loading="lazy"
+                        class="w-full h-full object-contain"
+                      />
+                    </div>
+
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center justify-between gap-1">
+                        <h3 class="font-semibold text-sm truncate group-hover:text-sky-400 transition"
+                            x-text="svc.custom_name"></h3>
+
+                        <!-- Edit Icon (Edit Mode) -->
+                        <button
+                          x-show="editMode"
+                          @click.stop="openServiceModal(svc)"
+                          class="p-1 rounded-lg hover:bg-white/10 text-sky-400 shrink-0"
+                          title="Modifica servizio">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                          </svg>
+                        </button>
+                      </div>
+                      <p class="text-xs theme-muted truncate" x-text="svc.domain"></p>
+                      <span x-show="svc.hidden" class="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                        Nascosto
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- Bottom Bar: Direct LAN Pill(s) & Status Dot -->
+                  <div class="flex items-center justify-between gap-2 pt-2 border-t text-xs"
+                       style="border-color: var(--border-card);">
+
+                    <div class="flex items-center flex-wrap gap-1.5 min-w-0">
+                      <!-- Primary LAN Upstream Pill -->
+                      <template x-if="getLanUrl(svc)">
+                        <a
+                          :href="getLanUrl(svc)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          @click.stop
+                          class="px-2 py-0.5 rounded-lg bg-black/25 hover:bg-sky-500/20 hover:text-sky-300 border text-[11px] font-mono truncate transition flex items-center gap-1"
+                          style="border-color: var(--border-card);"
+                          :title="'Apri direttamente in LAN: ' + getLanUrl(svc)">
+                          <span>LAN</span>
+                          <span class="opacity-80" x-text="formatUpstreamLabel(getLanUrl(svc))"></span>
+                        </a>
+                      </template>
+
+                      <!-- Additional Upstreams Pill Badges -->
+                      <template x-if="(svc.upstreams || []).length > 1">
+                        <div class="relative" x-data="{ openUp: false }">
+                          <button
+                            @click.stop="openUp = !openUp"
+                            class="px-1.5 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-mono theme-muted"
+                            :title="'Altri upstream (' + (svc.upstreams.length - 1) + ')'">
+                            +<span x-text="svc.upstreams.length - 1"></span>
+                          </button>
+                          <div
+                            x-show="openUp"
+                            @click.outside="openUp = false"
+                            x-cloak
+                            class="absolute left-0 bottom-full mb-1.5 z-30 w-48 rounded-xl border p-1.5 shadow-xl theme-surface space-y-1">
+                            <template x-for="up in svc.upstreams" :key="up">
+                              <a
+                                :href="up"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                @click.stop="openUp = false"
+                                class="block px-2 py-1 rounded-lg hover:bg-sky-500/20 text-[11px] font-mono truncate"
+                                x-text="formatUpstreamLabel(up)">
+                              </a>
+                            </template>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+
+                    <!-- Caddy Active Status Dot -->
+                    <div class="flex items-center gap-1.5 shrink-0"
+                         :title="svc.active ? 'Attivo su Caddy' : 'Orphaned: non più presente su Caddy'">
+                      <span
+                        class="w-2.5 h-2.5 rounded-full"
+                        :class="svc.active ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-amber-400'">
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+            </div>
+          </section>
+        </template>
+      </div>
+    </main>
+  </div>
+
+  <!-- 1. SERVICE EDIT MODAL -->
+  <div x-show="serviceModal.open" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+       @keydown.escape.window="serviceModal.open = false">
+    <div @click.outside="serviceModal.open = false"
+         class="w-full max-w-lg rounded-2xl border p-6 shadow-2xl theme-surface space-y-4">
+      <div class="flex items-center justify-between border-b pb-3" style="border-color: var(--border-card);">
+        <div>
+          <h3 class="text-base font-bold">Modifica Servizio</h3>
+          <p class="text-xs theme-muted font-mono" x-text="serviceModal.form.domain"></p>
+        </div>
+        <button @click="serviceModal.open = false" class="theme-muted hover:opacity-80">✕</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <!-- Custom Name -->
+        <div>
+          <label class="block font-medium mb-1">Nome Visualizzato</label>
+          <input type="text" x-model="serviceModal.form.custom_name"
+                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                 style="border-color: var(--border-card);" />
+        </div>
+
+        <!-- Category Select -->
+        <div>
+          <label class="block font-medium mb-1">Categoria</label>
+          <select x-model="serviceModal.form.category_id"
+                  class="w-full px-3 py-2 rounded-xl border bg-slate-900 text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  style="border-color: var(--border-card);">
+            <template x-for="cat in sortedCategories()" :key="cat.id">
+              <option :value="cat.id" x-text="cat.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- Custom Logo / Icon -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="font-medium">Logo / Icona (vuoto = Favicon automatico del link)</label>
+            <button type="button"
+                    @click="serviceModal.form.icon = ''"
+                    class="text-[11px] text-sky-400 hover:underline">
+              Usa Favicon automatico
+            </button>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <div class="w-12 h-12 rounded-xl border bg-black/25 p-1.5 flex items-center justify-center shrink-0 overflow-hidden"
+                 style="border-color: var(--border-card);">
+              <img :src="getIconUrl(serviceModal.form)"
+                   @error="handleIconError($event, serviceModal.form)"
+                   class="w-full h-full object-contain" />
+            </div>
+            <div class="flex-1 space-y-1.5">
+              <input type="text"
+                     x-model="serviceModal.form.icon"
+                     placeholder="Lascia vuoto per favicon, oppure incolla URL / carica file..."
+                     class="w-full px-3 py-1.5 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                     style="border-color: var(--border-card);" />
+
+              <div class="flex flex-wrap items-center gap-2">
+                <!-- Upload Custom Image File -->
+                <label class="px-2.5 py-1 rounded-lg border cursor-pointer hover:bg-white/5 transition inline-flex items-center gap-1"
+                       style="border-color: var(--border-card);">
+                  <span>Carica immagine...</span>
+                  <input type="file" accept="image/*" class="hidden" @change="uploadServiceIcon($event)" />
+                </label>
+
+                <!-- Quick dashboard-icons helper -->
+                <div class="flex items-center gap-1 flex-1 min-w-[160px]">
+                  <input type="text"
+                         x-model="serviceModal.iconSlug"
+                         placeholder="Slug dashboard-icons (es. jellyfin)"
+                         class="w-full px-2 py-1 rounded-lg border bg-black/20 text-[11px]"
+                         style="border-color: var(--border-card);" />
+                  <button type="button"
+                          @click="applyDashboardIconSlug()"
+                          class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] shrink-0">
+                    Applica
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Override LAN URL -->
+        <div>
+          <label class="block font-medium mb-1">Override URL LAN (opzionale)</label>
+          <input type="text"
+                 x-model="serviceModal.form.override_lan_url"
+                 :placeholder="(serviceModal.form.upstreams && serviceModal.form.upstreams[0]) || 'http://192.168.1.50:8080'"
+                 class="w-full px-3 py-2 rounded-xl border bg-black/25 font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+                 style="border-color: var(--border-card);" />
+        </div>
+
+        <!-- Hidden Toggle -->
+        <label class="flex items-center gap-2 cursor-pointer pt-1">
+          <input type="checkbox" x-model="serviceModal.form.hidden" class="rounded text-sky-500 focus:ring-sky-500" />
+          <span>Nascondi questo servizio dalla dashboard normale</span>
+        </label>
+      </div>
+
+      <div class="flex items-center justify-between pt-4 border-t" style="border-color: var(--border-card);">
+        <button
+          type="button"
+          @click="deleteService(serviceModal.form.domain)"
+          class="px-3 py-2 rounded-xl border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 text-xs font-medium">
+          Elimina Servizio
+        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            @click="serviceModal.open = false"
+            class="px-3 py-2 rounded-xl border text-xs"
+            style="border-color: var(--border-card);">
+            Annulla
+          </button>
+          <button
+            type="button"
+            @click="saveServiceModal()"
+            class="px-4 py-2 rounded-xl bg-sky-500 text-slate-950 font-semibold text-xs hover:bg-sky-400">
+            Salva Modifiche
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. CATEGORY MODAL -->
+  <div x-show="categoryModal.open" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+       @keydown.escape.window="categoryModal.open = false">
+    <div @click.outside="categoryModal.open = false"
+         class="w-full max-w-md rounded-2xl border p-6 shadow-2xl theme-surface space-y-4">
+      <div class="flex items-center justify-between border-b pb-3" style="border-color: var(--border-card);">
+        <h3 class="text-base font-bold" x-text="categoryModal.isEdit ? 'Rinomina Categoria' : 'Nuova Categoria'"></h3>
+        <button @click="categoryModal.open = false" class="theme-muted">✕</button>
+      </div>
+
+      <div class="text-xs space-y-2">
+        <label class="block font-medium">Nome Categoria</label>
+        <input type="text"
+               x-model="categoryModal.name"
+               @keydown.enter="saveCategoryModal()"
+               placeholder="es. Media & Streaming"
+               class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
+               style="border-color: var(--border-card);" />
+      </div>
+
+      <div class="flex justify-end gap-2 pt-3 border-t" style="border-color: var(--border-card);">
+        <button @click="categoryModal.open = false" class="px-3 py-1.5 rounded-xl border text-xs" style="border-color: var(--border-card);">
+          Annulla
+        </button>
+        <button @click="saveCategoryModal()" class="px-4 py-1.5 rounded-xl bg-sky-500 text-slate-950 font-semibold text-xs hover:bg-sky-400">
+          Salva
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. THEME & APPEARANCE MODAL -->
+  <div x-show="appearanceModal.open" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+       @keydown.escape.window="appearanceModal.open = false">
+    <div @click.outside="appearanceModal.open = false"
+         class="w-full max-w-lg rounded-2xl border p-6 shadow-2xl theme-surface space-y-4 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b pb-3" style="border-color: var(--border-card);">
+        <h3 class="text-base font-bold">Tema, Sfondo & Impostazioni</h3>
+        <button @click="appearanceModal.open = false" class="theme-muted">✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <!-- Dashboard Title -->
+        <div>
+          <label class="block font-medium mb-1">Titolo Dashboard</label>
+          <input type="text" x-model="appearanceModal.form.title"
+                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                 style="border-color: var(--border-card);" />
+        </div>
+
+        <!-- Color Theme Preset -->
+        <div>
+          <label class="block font-medium mb-1.5">Tema Colori</label>
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <template x-for="t in themes" :key="t.id">
+              <button
+                type="button"
+                @click="appearanceModal.form.theme = t.id; applyTheme(t.id)"
+                :class="appearanceModal.form.theme === t.id ? 'ring-2 ring-sky-400 border-sky-400' : 'opacity-80 hover:opacity-100'"
+                class="p-2.5 rounded-xl border text-center transition flex flex-col items-center gap-1.5"
+                style="border-color: var(--border-card);">
+                <span class="w-6 h-6 rounded-full border border-white/20 shadow-inner" :style="`background: ${t.preview}`"></span>
+                <span class="font-medium text-[11px]" x-text="t.label"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <!-- Custom Background Image -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="font-medium">Immagine di Sfondo Custom</label>
+            <button
+              type="button"
+              x-show="appearanceModal.form.background_image"
+              @click="appearanceModal.form.background_image = ''"
+              class="text-rose-400 hover:underline text-[11px]">
+              Rimuovi sfondo
+            </button>
+          </div>
+          <input type="text"
+                 x-model="appearanceModal.form.background_image"
+                 placeholder="URL immagine (https://... o /uploads/...) oppure carica dal PC"
+                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                 style="border-color: var(--border-card);" />
+          <div class="flex items-center justify-between gap-2">
+            <label class="px-3 py-1.5 rounded-xl border cursor-pointer hover:bg-white/5 transition inline-flex items-center gap-1.5"
+                   style="border-color: var(--border-card);">
+              <span>Carica file sfondo...</span>
+              <input type="file" accept="image/*" class="hidden" @change="uploadBackgroundImage($event)" />
+            </label>
+            <div class="flex items-center gap-2 flex-1 max-w-xs">
+              <span class="theme-muted shrink-0">Opacità velo:</span>
+              <input type="range" min="0.1" max="0.95" step="0.05"
+                     x-model.number="appearanceModal.form.background_overlay_opacity"
+                     class="w-full accent-sky-400" />
+              <span class="w-9 text-right font-mono" x-text="Math.round((appearanceModal.form.background_overlay_opacity || 0.75) * 100) + '%'"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Network / Caddy Defaults -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t" style="border-color: var(--border-card);">
+          <div>
+            <label class="block font-medium mb-1">IP LAN Default (per container Docker)</label>
+            <input type="text" x-model="appearanceModal.form.default_lan_ip"
+                   class="w-full px-3 py-1.5 rounded-xl border bg-black/25 font-mono"
+                   style="border-color: var(--border-card);" />
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Intervallo Sync (secondi)</label>
+            <input type="number" min="5" x-model.number="appearanceModal.form.sync_interval_seconds"
+                   class="w-full px-3 py-1.5 rounded-xl border bg-black/25 font-mono"
+                   style="border-color: var(--border-card);" />
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-4 border-t" style="border-color: var(--border-card);">
+        <button @click="appearanceModal.open = false; applyTheme(state.settings.theme)"
+                class="px-3 py-2 rounded-xl border text-xs"
+                style="border-color: var(--border-card);">
+          Annulla
+        </button>
+        <button @click="saveAppearanceModal()"
+                class="px-4 py-2 rounded-xl bg-sky-500 text-slate-950 font-semibold text-xs hover:bg-sky-400">
+          Salva Impostazioni
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const FALLBACK_ICON_SVG = "data:image/svg+xml;utf8," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="7" rx="2"/>
+        <rect x="2" y="14" width="20" height="7" rx="2"/>
+        <circle cx="6" cy="6.5" r="1" fill="#38bdf8"/>
+        <circle cx="6" cy="17.5" r="1" fill="#38bdf8"/>
+      </svg>`
+    );
+
+    function caddyHomeApp() {
+      return {
+        state: {
+          settings: {
+            title: "Homelab Gateway",
+            theme: "dark",
+            background_image: "",
+            background_overlay_opacity: 0.75,
+            caddy_mode: "both",
+            caddy_file_path: "/etc/caddy/Caddyfile",
+            caddy_api_url: "http://caddy:2019/config/",
+            default_lan_ip: "192.168.1.10",
+            sync_interval_seconds: 60
+          },
+          categories: [],
+          services: {}
+        },
+        searchQuery: "",
+        lanMode: localStorage.getItem("caddyhome_lan_mode") === "true",
+        editMode: false,
+        showHidden: false,
+        syncing: false,
+        toastMessage: "",
+        sortableInstances: [],
+
+        themes: [
+          { id: "dark", label: "Dark", preview: "#0f172a" },
+          { id: "light", label: "Light", preview: "#f8fafc" },
+          { id: "oled", label: "OLED", preview: "#000000" },
+          { id: "nord", label: "Nord", preview: "#2e3440" },
+          { id: "catppuccin", label: "Catppuccin", preview: "#1e1e2e" }
+        ],
+
+        serviceModal: {
+          open: false,
+          iconSlug: "",
+          form: {
+            domain: "",
+            custom_name: "",
+            icon: "",
+            category_id: "cat_uncat",
+            override_lan_url: "",
+            hidden: false,
+            upstreams: [],
+            external_url: ""
+          }
+        },
+
+        categoryModal: {
+          open: false,
+          isEdit: false,
+          id: "",
+          name: ""
+        },
+
+        appearanceModal: {
+          open: false,
+          form: {}
+        },
+
+        async init() {
+          await this.fetchState();
+          window.addEventListener("keydown", (e) => {
+            if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+              e.preventDefault();
+              this.$refs.searchInput?.focus();
+            }
+          });
+        },
+
+        showToast(msg) {
+          this.toastMessage = msg;
+          setTimeout(() => {
+            if (this.toastMessage === msg) this.toastMessage = "";
+          }, 2800);
+        },
+
+        applyTheme(themeName) {
+          const t = themeName || "dark";
+          document.documentElement.setAttribute("data-theme", t);
+          if (this.state.settings?.title) {
+            document.title = this.state.settings.title;
+          }
+        },
+
+        async fetchState() {
+          try {
+            const res = await fetch("/api/state");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            this.state = await res.json();
+            this.applyTheme(this.state.settings?.theme);
+          } catch (err) {
+            console.error("Failed loading state:", err);
+            this.showToast("Errore caricamento stato");
+          }
+        },
+
+        async syncNow() {
+          this.syncing = true;
+          try {
+            const res = await fetch("/api/sync", { method: "POST" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            this.state = await res.json();
+            this.applyTheme(this.state.settings?.theme);
+            this.showToast("Sincronizzazione con Caddy completata");
+          } catch (err) {
+            console.error("Sync failed:", err);
+            this.showToast("Errore durante il sync con Caddy");
+          } finally {
+            this.syncing = false;
+          }
+        },
+
+        async persistState(toastText = "Configurazione salvata") {
+          try {
+            const res = await fetch("/api/state", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(this.state)
+            });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            this.state = await res.json();
+            this.applyTheme(this.state.settings?.theme);
+            if (toastText) this.showToast(toastText);
+          } catch (err) {
+            console.error("Save failed:", err);
+            this.showToast("Errore nel salvataggio");
+          }
+        },
+
+        toggleLanMode() {
+          this.lanMode = !this.lanMode;
+          localStorage.setItem("caddyhome_lan_mode", String(this.lanMode));
+        },
+
+        activeServiceCount() {
+          return Object.values(this.state.services || {}).filter(s => s && s.active && !s.hidden).length;
+        },
+
+        hiddenServiceCount() {
+          return Object.values(this.state.services || {}).filter(s => s && s.hidden).length;
+        },
+
+        sortedCategories() {
+          return [...(this.state.categories || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        },
+
+        servicesForCategory(catId) {
+          const q = this.searchQuery.trim().toLowerCase();
+          return Object.values(this.state.services || {})
+            .filter(svc => {
+              if (!svc) return false;
+              const targetCat = svc.category_id || "cat_uncat";
+              if (targetCat !== catId) return false;
+              if (svc.hidden && !(this.editMode && this.showHidden)) return false;
+              if (!q) return true;
+              const nameMatch = (svc.custom_name || "").toLowerCase().includes(q);
+              const domMatch = (svc.domain || "").toLowerCase().includes(q);
+              const upMatch = (svc.upstreams || []).some(u => u.toLowerCase().includes(q));
+              const ovMatch = (svc.override_lan_url || "").toLowerCase().includes(q);
+              return nameMatch || domMatch || upMatch || ovMatch;
+            })
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        },
+
+        getLanUrl(svc) {
+          if (!svc) return "";
+          if (svc.override_lan_url && svc.override_lan_url.trim() !== "") {
+            return svc.override_lan_url.trim();
+          }
+          if (svc.upstreams && svc.upstreams.length > 0) {
+            return svc.upstreams[0];
+          }
+          return svc.external_url || "";
+        },
+
+        getPrimaryUrl(svc) {
+          if (!svc) return "#";
+          if (this.lanMode) {
+            return this.getLanUrl(svc) || svc.external_url || ("https://" + svc.domain);
+          }
+          return svc.external_url || ("https://" + svc.domain);
+        },
+
+        getIconUrl(svc) {
+          if (!svc) return FALLBACK_ICON_SVG;
+          if (svc.icon && svc.icon.trim() !== "") {
+            return svc.icon.trim();
+          }
+          // Default: link's own favicon
+          const base = this.lanMode
+            ? (this.getLanUrl(svc) || svc.external_url || ("https://" + svc.domain))
+            : (svc.external_url || ("https://" + svc.domain));
+          return base.replace(/\/+$/, "") + "/favicon.ico";
+        },
+
+        handleIconError(event, svc) {
+          const img = event.target;
+          const lanBase = this.getLanUrl(svc);
+          // If external favicon failed and LAN URL is different, try LAN favicon once before SVG fallback
+          if (!img.dataset.triedLan && lanBase && (!svc.icon || svc.icon.trim() === "")) {
+            img.dataset.triedLan = "1";
+            img.src = lanBase.replace(/\/+$/, "") + "/favicon.ico";
+            return;
+          }
+          if (img.src !== FALLBACK_ICON_SVG) {
+            img.src = FALLBACK_ICON_SVG;
+          }
+        },
+
+        formatUpstreamLabel(url) {
+          if (!url) return "";
+          return url.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+        },
+
+        handleCardClick(svc) {
+          if (this.editMode) {
+            this.openServiceModal(svc);
+            return;
+          }
+          const targetUrl = this.getPrimaryUrl(svc);
+          if (targetUrl) {
+            window.open(targetUrl, "_blank", "noopener,noreferrer");
+          }
+        },
+
+        toggleEditMode() {
+          if (!this.editMode) {
+            this.editMode = true;
+            this.$nextTick(() => this.initSortable());
+          } else {
+            this.syncOrderFromDOM();
+            this.destroySortable();
+            this.editMode = false;
+            this.persistState("Layout salvato");
+          }
+        },
+
+        initSortable() {
+          this.destroySortable();
+          const catRoot = document.getElementById("categories-root");
+          if (catRoot) {
+            this.sortableInstances.push(
+              new Sortable(catRoot, {
+                animation: 150,
+                handle: ".cat-drag-handle",
+                ghostClass: "sortable-ghost",
+                onEnd: () => this.syncOrderFromDOM()
+              })
+            );
+          }
+          document.querySelectorAll(".service-grid").forEach(grid => {
+            this.sortableInstances.push(
+              new Sortable(grid, {
+                group: "services",
+                animation: 150,
+                ghostClass: "sortable-ghost",
+                onEnd: () => this.syncOrderFromDOM()
+              })
+            );
+          });
+        },
+
+        destroySortable() {
+          this.sortableInstances.forEach(inst => inst.destroy());
+          this.sortableInstances = [];
+        },
+
+        syncOrderFromDOM() {
+          // 1. Sync category order from DOM
+          const catSections = document.querySelectorAll("#categories-root > section[data-category-id]");
+          catSections.forEach((sec, idx) => {
+            const catId = sec.getAttribute("data-category-id");
+            const catObj = (this.state.categories || []).find(c => c.id === catId);
+            if (catObj) catObj.order = idx;
+          });
+
+          // 2. Sync service cards category_id & order from DOM
+          const grids = document.querySelectorAll(".service-grid[data-category-id]");
+          grids.forEach(grid => {
+            const catId = grid.getAttribute("data-category-id");
+            const cards = grid.querySelectorAll("[data-domain]");
+            cards.forEach((card, idx) => {
+              const domain = card.getAttribute("data-domain");
+              const svc = this.state.services?.[domain];
+              if (svc) {
+                svc.category_id = catId;
+                svc.order = idx;
+              }
+            });
+          });
+        },
+
+        openServiceModal(svc) {
+          this.serviceModal.iconSlug = "";
+          this.serviceModal.form = {
+            domain: svc.domain,
+            custom_name: svc.custom_name || svc.domain,
+            icon: svc.icon || "",
+            category_id: svc.category_id || "cat_uncat",
+            override_lan_url: svc.override_lan_url || "",
+            hidden: Boolean(svc.hidden),
+            upstreams: svc.upstreams || [],
+            external_url: svc.external_url || ("https://" + svc.domain)
+          };
+          this.serviceModal.open = true;
+        },
+
+        applyDashboardIconSlug() {
+          const slug = this.serviceModal.iconSlug.trim().toLowerCase().replace(/\.png$/, "");
+          if (!slug) return;
+          this.serviceModal.form.icon = `https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/${slug}.png`;
+        },
+
+        async uploadFileHelper(file) {
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error || ("HTTP " + res.status));
+          }
+          const data = await res.json();
+          return data.url;
+        },
+
+        async uploadServiceIcon(event) {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          try {
+            const url = await this.uploadFileHelper(file);
+            this.serviceModal.form.icon = url;
+            this.showToast("Logo caricato");
+          } catch (err) {
+            this.showToast("Errore upload: " + err.message);
+          } finally {
+            event.target.value = "";
+          }
+        },
+
+        async uploadBackgroundImage(event) {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          try {
+            const url = await this.uploadFileHelper(file);
+            this.appearanceModal.form.background_image = url;
+            this.showToast("Sfondo caricato");
+          } catch (err) {
+            this.showToast("Errore upload: " + err.message);
+          } finally {
+            event.target.value = "";
+          }
+        },
+
+        async saveServiceModal() {
+          const f = this.serviceModal.form;
+          const target = this.state.services?.[f.domain];
+          if (!target) return;
+          target.custom_name = f.custom_name.trim() || f.domain;
+          target.icon = f.icon.trim();
+          target.category_id = f.category_id || "cat_uncat";
+          target.override_lan_url = f.override_lan_url.trim() ? f.override_lan_url.trim() : null;
+          target.hidden = Boolean(f.hidden);
+          this.serviceModal.open = false;
+          await this.persistState("Servizio aggiornato");
+          if (this.editMode) {
+            this.$nextTick(() => this.initSortable());
+          }
+        },
+
+        async deleteService(domain) {
+          if (!domain || !this.state.services?.[domain]) return;
+          delete this.state.services[domain];
+          this.serviceModal.open = false;
+          await this.persistState("Servizio eliminato");
+        },
+
+        openCategoryModal(cat = null) {
+          if (cat) {
+            this.categoryModal.isEdit = true;
+            this.categoryModal.id = cat.id;
+            this.categoryModal.name = cat.name;
+          } else {
+            this.categoryModal.isEdit = false;
+            this.categoryModal.id = "";
+            this.categoryModal.name = "";
+          }
+          this.categoryModal.open = true;
+        },
+
+        async saveCategoryModal() {
+          const name = this.categoryModal.name.trim();
+          if (!name) return;
+          if (this.categoryModal.isEdit) {
+            const cat = (this.state.categories || []).find(c => c.id === this.categoryModal.id);
+            if (cat) cat.name = name;
+          } else {
+            const id = "cat_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_") + "_" + Date.now().toString(36);
+            const maxOrder = (this.state.categories || [])
+              .filter(c => c.id !== "cat_uncat")
+              .reduce((m, c) => Math.max(m, c.order ?? 0), -1);
+            this.state.categories.push({
+              id,
+              name,
+              order: maxOrder + 1
+            });
+          }
+          this.categoryModal.open = false;
+          await this.persistState("Categoria salvata");
+          if (this.editMode) {
+            this.$nextTick(() => this.initSortable());
+          }
+        },
+
+        async deleteCategory(catId) {
+          if (catId === "cat_uncat") return;
+          this.state.categories = (this.state.categories || []).filter(c => c.id !== catId);
+          Object.values(this.state.services || {}).forEach(svc => {
+            if (svc && svc.category_id === catId) {
+              svc.category_id = "cat_uncat";
+            }
+          });
+          await this.persistState("Categoria eliminata");
+          if (this.editMode) {
+            this.$nextTick(() => this.initSortable());
+          }
+        },
+
+        openAppearanceModal() {
+          this.appearanceModal.form = JSON.parse(JSON.stringify(this.state.settings || {}));
+          if (!this.appearanceModal.form.theme) this.appearanceModal.form.theme = "dark";
+          if (this.appearanceModal.form.background_overlay_opacity == null) {
+            this.appearanceModal.form.background_overlay_opacity = 0.75;
+          }
+          this.appearanceModal.open = true;
+        },
+
+        async saveAppearanceModal() {
+          this.state.settings = {
+            ...this.state.settings,
+            ...this.appearanceModal.form
+          };
+          this.appearanceModal.open = false;
+          await this.persistState("Tema e impostazioni salvati");
+        }
+      };
+    }
+  </script>
+</body>
+</html>
