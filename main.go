@@ -37,6 +37,8 @@ type EnvConfig struct {
 	CaddyAPIURL         string
 	DefaultLanIP        string
 	SyncIntervalSeconds int
+	PUID                int
+	PGID                int
 }
 
 type Category struct {
@@ -92,6 +94,15 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+func parseEnvID(key string) int {
+	if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			return parsed
+		}
+	}
+	return -1
+}
+
 func loadEnvConfig() EnvConfig {
 	syncSec := 60
 	if raw := strings.TrimSpace(os.Getenv("SYNC_INTERVAL_SECONDS")); raw != "" {
@@ -109,6 +120,8 @@ func loadEnvConfig() EnvConfig {
 		CaddyAPIURL:         envOrDefault("CADDY_API_URL", "http://localhost:2019/config/"),
 		DefaultLanIP:        envOrDefault("DEFAULT_LAN_IP", "127.0.0.1"),
 		SyncIntervalSeconds: syncSec,
+		PUID:                parseEnvID("PUID"),
+		PGID:                parseEnvID("PGID"),
 	}
 }
 
@@ -188,8 +201,15 @@ func ensureStateDefaults(st *AppState) {
 	}
 }
 
+func (s *Server) applyOwnership(path string) {
+	if s.envConfig.PUID >= 0 || s.envConfig.PGID >= 0 {
+		_ = os.Chown(path, s.envConfig.PUID, s.envConfig.PGID)
+	}
+}
+
 func NewServer(configPath string) (*Server, error) {
-	uploadsDir := filepath.Join(filepath.Dir(configPath), "uploads")
+	dataDir := filepath.Dir(configPath)
+	uploadsDir := filepath.Join(dataDir, "uploads")
 	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create uploads dir: %w", err)
 	}
@@ -200,6 +220,8 @@ func NewServer(configPath string) (*Server, error) {
 		state:      defaultState(),
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}
+	srv.applyOwnership(dataDir)
+	srv.applyOwnership(uploadsDir)
 	if err := srv.loadState(); err != nil {
 		log.Printf("WARN: could not load existing config (%v), initializing defaults", err)
 		srv.mu.Lock()
@@ -229,15 +251,22 @@ func (s *Server) loadState() error {
 	ensureStateDefaults(&loaded)
 	s.mu.Lock()
 	s.state = loaded
+	if normalized, err := json.MarshalIndent(s.state, "", "  "); err == nil && string(normalized) != strings.TrimSpace(string(data)) {
+		_ = s.saveStateLocked()
+	} else {
+		s.applyOwnership(s.configPath)
+	}
 	s.mu.Unlock()
 	return nil
 }
 
 // saveStateLocked writes state atomically to configPath. Caller must hold s.mu.
 func (s *Server) saveStateLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.configPath), 0o755); err != nil {
+	dataDir := filepath.Dir(s.configPath)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
+	s.applyOwnership(dataDir)
 	payload, err := json.MarshalIndent(s.state, "", "  ")
 	if err != nil {
 		return err
@@ -261,6 +290,7 @@ func (s *Server) saveStateLocked() error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+	s.applyOwnership(tmpPath)
 	return os.Rename(tmpPath, s.configPath)
 }
 
@@ -1145,6 +1175,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed saving uploaded file"})
 		return
 	}
+	s.applyOwnership(destPath)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"url": "/uploads/" + filename,

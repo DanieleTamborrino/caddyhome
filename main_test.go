@@ -291,9 +291,17 @@ func TestDefaultModeAndEnvOnlyConfig(t *testing.T) {
 		t.Fatalf("expected default CaddyMode 'api', got %q", envCfg.CaddyMode)
 	}
 
-	// Ensure persisted config.json never stores docker-compose environment settings
+	// Ensure persisted config.json never stores docker-compose environment settings,
+	// and strips legacy env keys if an older config.json already has them on disk.
 	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	legacyJSON := `{"settings":{"title":"CaddyHome","theme":"dark","caddy_api_url":"http://caddy:2019/config/","caddy_mode":"api"},"categories":[],"services":{}}`
+	if err := os.WriteFile(tmpCfg, []byte(legacyJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("CADDY_MODE", "both") // invalid/legacy mode should fall back to "api"
+	t.Setenv("CADDY_API_URL", "http://localhost:2019/config/")
+	t.Setenv("PUID", "3000")
+	t.Setenv("PGID", "3000")
 	srv, err := NewServer(tmpCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -301,13 +309,19 @@ func TestDefaultModeAndEnvOnlyConfig(t *testing.T) {
 	if srv.envConfig.CaddyMode != "api" {
 		t.Fatalf("expected legacy 'both' to normalize to 'api', got %q", srv.envConfig.CaddyMode)
 	}
+	if srv.envConfig.CaddyAPIURL != "http://localhost:2019/config/" {
+		t.Fatalf("expected CADDY_API_URL from env, got %q", srv.envConfig.CaddyAPIURL)
+	}
+	if srv.envConfig.PUID != 3000 || srv.envConfig.PGID != 3000 {
+		t.Fatalf("expected PUID/PGID 3000/3000, got %d/%d", srv.envConfig.PUID, srv.envConfig.PGID)
+	}
 
 	rawDisk, err := os.ReadFile(tmpCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	diskStr := string(rawDisk)
-	for _, forbiddenKey := range []string{"caddy_mode", "caddy_file_path", "caddy_api_url", "default_lan_ip", "sync_interval_seconds"} {
+	for _, forbiddenKey := range []string{"caddy_mode", "caddy_file_path", "caddy_api_url", "default_lan_ip", "sync_interval_seconds", "puid", "pgid"} {
 		if bytes.Contains(rawDisk, []byte(forbiddenKey)) {
 			t.Fatalf("config.json must not persist env setting %q, got:\n%s", forbiddenKey, diskStr)
 		}
