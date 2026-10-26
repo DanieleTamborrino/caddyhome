@@ -8,10 +8,11 @@ services:
     environment:
       - PORT=8080
       - CONFIG_PATH=/data/config.json
-      - CADDY_MODE=both
-      - CADDYFILE_PATH=/etc/caddy/Caddyfile
+      - CADDY_MODE=api
       - CADDY_API_URL=http://caddy:2019/config/
       - DEFAULT_LAN_IP=192.168.1.10
+      # Used only when CADDY_MODE=file:
+      - CADDYFILE_PATH=/etc/caddy/Caddyfile
       - SYNC_INTERVAL_SECONDS=60
     volumes:
       - ./data:/data

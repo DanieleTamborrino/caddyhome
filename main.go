@@ -95,12 +95,12 @@ func defaultSettings() Settings {
 			syncSec = parsed
 		}
 	}
-	mode := strings.ToLower(envOrDefault("CADDY_MODE", "both"))
-	if mode != "file" && mode != "api" && mode != "both" {
-		mode = "both"
+	mode := strings.ToLower(envOrDefault("CADDY_MODE", "api"))
+	if mode != "file" && mode != "api" {
+		mode = "api"
 	}
 	return Settings{
-		Title:                    "Homelab Gateway",
+		Title:                    "CaddyHome",
 		Theme:                    "dark",
 		BackgroundImage:          "",
 		BackgroundOverlayOpacity: 0.75,
@@ -135,7 +135,7 @@ func ensureStateDefaults(st *AppState) {
 		st.Settings.BackgroundOverlayOpacity = 0.75
 	}
 	mode := strings.ToLower(strings.TrimSpace(st.Settings.CaddyMode))
-	if mode != "file" && mode != "api" && mode != "both" {
+	if mode != "file" && mode != "api" {
 		st.Settings.CaddyMode = defaults.CaddyMode
 	} else {
 		st.Settings.CaddyMode = mode
@@ -886,11 +886,12 @@ func (s *Server) reconcileState(force bool) {
 	s.mu.RUnlock()
 
 	mode := strings.ToLower(settings.CaddyMode)
-	wantFile := mode == "file" || mode == "both"
-	wantAPI := mode == "api" || mode == "both"
+	if mode != "file" {
+		mode = "api"
+	}
 
-	// Optimization: if only watching Caddyfile and !force, check file mtime/size first
-	if wantFile && !wantAPI && !force {
+	// Optimization: when watching Caddyfile in background (!force), check file mtime/size first
+	if mode == "file" && !force {
 		info, err := os.Stat(settings.CaddyFilePath)
 		if err != nil {
 			return
@@ -900,42 +901,32 @@ func (s *Server) reconcileState(force bool) {
 		}
 	}
 
-	merged := make(map[string]*DiscoveredService)
+	var discovered map[string]*DiscoveredService
 	sourcesSucceeded := 0
 
-	if wantFile {
+	if mode == "file" {
 		if info, err := os.Stat(settings.CaddyFilePath); err == nil {
 			if fileDiscovered, err := parseCaddyfile(settings.CaddyFilePath, settings.DefaultLanIP); err == nil {
 				sourcesSucceeded++
 				s.lastFileModTime = info.ModTime()
 				s.lastFileSize = info.Size()
-				for dom, dSvc := range fileDiscovered {
-					merged[dom] = dSvc
-				}
+				discovered = fileDiscovered
 			} else {
 				log.Printf("WARN: Caddyfile parse failed: %v", err)
 			}
+		} else if force {
+			log.Printf("WARN: Caddyfile stat failed (%s): %v", settings.CaddyFilePath, err)
 		}
-	}
-
-	if wantAPI {
+	} else {
 		if apiDiscovered, err := s.parseCaddyAPI(settings.CaddyAPIURL, settings.DefaultLanIP); err == nil {
 			sourcesSucceeded++
-			for dom, apiSvc := range apiDiscovered {
-				if existing, ok := merged[dom]; ok {
-					for _, u := range apiSvc.Upstreams {
-						existing.Upstreams = addUniqueUpstream(existing.Upstreams, u)
-					}
-				} else {
-					merged[dom] = apiSvc
-				}
-			}
+			discovered = apiDiscovered
 		} else if force {
 			log.Printf("WARN: Caddy Admin API query failed: %v", err)
 		}
 	}
 
-	// Do not wipe active status if all configured discovery sources failed (e.g. Caddy restarting)
+	// Do not wipe active status if discovery source failed (e.g. Caddy restarting)
 	if sourcesSucceeded == 0 {
 		return
 	}
@@ -989,14 +980,14 @@ func (s *Server) reconcileState(force bool) {
 	}
 
 	// Deterministic iteration order
-	domains := make([]string, 0, len(merged))
-	for dom := range merged {
+	domains := make([]string, 0, len(discovered))
+	for dom := range discovered {
 		domains = append(domains, dom)
 	}
 	sort.Strings(domains)
 
 	for _, dom := range domains {
-		dSvc := merged[dom]
+		dSvc := discovered[dom]
 		if existing, exists := s.state.Services[dom]; !exists {
 			customName := dSvc.MagicName
 			if customName == "" {
@@ -1031,7 +1022,7 @@ func (s *Server) reconcileState(force bool) {
 
 	// Mark services missing from current discovery as Active = false
 	for dom, existing := range s.state.Services {
-		if _, present := merged[dom]; !present {
+		if _, present := discovered[dom]; !present {
 			if existing.Active {
 				existing.Active = false
 				dirty = true
@@ -1178,13 +1169,16 @@ func (s *Server) startBackgroundSync() {
 	go func() {
 		for {
 			s.mu.RLock()
+			mode := strings.ToLower(s.state.Settings.CaddyMode)
 			intervalSec := s.state.Settings.SyncIntervalSeconds
 			s.mu.RUnlock()
 			if intervalSec < 5 {
 				intervalSec = 60
 			}
 			time.Sleep(time.Duration(intervalSec) * time.Second)
-			s.reconcileState(false)
+			if mode == "file" {
+				s.reconcileState(false)
+			}
 		}
 	}()
 }

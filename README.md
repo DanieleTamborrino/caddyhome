@@ -11,10 +11,9 @@ Built as a single static **Go** binary with an embedded zero-build SPA frontend 
 
 ## ✨ Key Features
 
-- **Automatic Caddy Discovery (`file`, `api`, or `both`):**
-  - Parses standard `Caddyfile` site blocks, multi-domain blocks, and wildcard (`*.domain.tld`) blocks using `@matcher` + `handle @matcher`.
-  - Queries the live Caddy Admin API (`/config/apps/http/servers`) to resolve nested `subroute` and `reverse_proxy` handlers.
-  - Supports optional **magic comments** (`# @name`, `# @category`, `# @icon`) directly inside your `Caddyfile`.
+- **Automatic Caddy Discovery (`api` or `file`):**
+  - **`api` (Default):** Queries the live Caddy Admin API (`/config/apps/http/servers`) to resolve nested `subroute` and `reverse_proxy` handlers.
+  - **`file`:** Parses standard `Caddyfile` site blocks, multi-domain blocks, wildcard (`*.domain.tld`) blocks using `@matcher` + `handle @matcher`, and optional **magic comments** (`# @name`, `# @category`, `# @icon`).
 - **Non-Destructive Reconciliation:**
   - Automatically adds newly discovered domains, updates internal LAN `upstreams`, and flags removed services as `Orphaned` (`active: false`) **without ever overwriting** user customizations made in the UI.
 - **Dual-Link Navigation (External HTTPS vs. Direct LAN IP):**
@@ -51,13 +50,15 @@ services:
     environment:
       - PORT=8080
       - CONFIG_PATH=/data/config.json
-      - CADDY_MODE=both
-      - CADDYFILE_PATH=/etc/caddy/Caddyfile
+      - CADDY_MODE=api
       - CADDY_API_URL=http://caddy:2019/config/
       - DEFAULT_LAN_IP=192.168.1.10
+      # Used only when CADDY_MODE=file:
+      - CADDYFILE_PATH=/etc/caddy/Caddyfile
       - SYNC_INTERVAL_SECONDS=60
     volumes:
       - ./data:/data
+      # Required only when CADDY_MODE=file:
       - /path/to/your/Caddyfile:/etc/caddy/Caddyfile:ro
 ```
 
@@ -77,11 +78,11 @@ Open `http://localhost:8080` in your browser.
 | :--- | :--- | :--- |
 | `PORT` | `8080` | HTTP listening port for the web interface and API. |
 | `CONFIG_PATH` | `/data/config.json` | Path to the persistent JSON state file. Uploaded images are stored alongside it in `/data/uploads/`. |
-| `CADDY_MODE` | `both` | Discovery source: `file` (Caddyfile only), `api` (Caddy Admin API only), or `both`. |
-| `CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Path to the mounted `Caddyfile` when `CADDY_MODE` is `file` or `both`. |
-| `CADDY_API_URL` | `http://localhost:2019/config/` | Base URL of the Caddy Admin API when `CADDY_MODE` is `api` or `both`. |
+| `CADDY_MODE` | `api` | Discovery source: `api` (Caddy Admin API, default) or `file` (mounted `Caddyfile`). |
+| `CADDY_API_URL` | `http://localhost:2019/config/` | Base URL of the Caddy Admin API (used when `CADDY_MODE=api`). |
+| `CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Path to the mounted `Caddyfile` (used only when `CADDY_MODE=file`). |
 | `DEFAULT_LAN_IP` | `127.0.0.1` | Host IP substituted when an upstream target is a Docker container hostname without dots (e.g. `jellyfin:8096` -> `http://192.168.1.10:8096`). |
-| `SYNC_INTERVAL_SECONDS` | `60` | Background reconciliation interval in seconds (minimum `5`). |
+| `SYNC_INTERVAL_SECONDS` | `60` | Background file-check interval in seconds (minimum `5`, **used only when `CADDY_MODE=file`**). |
 
 ---
 

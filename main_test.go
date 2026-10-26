@@ -279,3 +279,26 @@ plex.example.com {
 		t.Fatalf("POST /api/upload status = %d: %s", upRec.Code, upRec.Body.String())
 	}
 }
+
+func TestDefaultMode(t *testing.T) {
+	t.Setenv("CADDY_MODE", "")
+	def := defaultSettings()
+	if def.Title != "CaddyHome" {
+		t.Fatalf("expected default Title 'CaddyHome', got %q", def.Title)
+	}
+	if def.CaddyMode != "api" {
+		t.Fatalf("expected default CaddyMode 'api', got %q", def.CaddyMode)
+	}
+
+	// Legacy "both" in persisted config should normalize to "api"
+	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	_ = os.WriteFile(tmpCfg, []byte(`{"settings":{"caddy_mode":"both"}}`), 0o644)
+
+	srv, err := NewServer(tmpCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.state.Settings.CaddyMode != "api" {
+		t.Fatalf("expected legacy 'both' to normalize to 'api', got %q", srv.state.Settings.CaddyMode)
+	}
+}
