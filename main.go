@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/tls"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,9 +83,19 @@ type DiscoveredService struct {
 	MagicIcon     string
 }
 
+type cachedFavicon struct {
+	data        []byte
+	contentType string
+	notFound    bool
+	expiresAt   time.Time
+}
+
 type Server struct {
 	mu              sync.RWMutex
 	reconcileMu     sync.Mutex
+	faviconMu       sync.RWMutex
+	faviconCache    map[string]cachedFavicon
+	faviconClient   *http.Client
 	configPath      string
 	uploadsDir      string
 	envConfig       EnvConfig
@@ -223,10 +236,17 @@ func NewServer(configPath string) (*Server, error) {
 		return nil, fmt.Errorf("create uploads dir: %w", err)
 	}
 	srv := &Server{
-		configPath: configPath,
-		uploadsDir: uploadsDir,
-		envConfig:  loadEnvConfig(),
-		state:      defaultState(),
+		configPath:   configPath,
+		uploadsDir:   uploadsDir,
+		envConfig:    loadEnvConfig(),
+		state:        defaultState(),
+		faviconCache: make(map[string]cachedFavicon),
+		faviconClient: &http.Client{
+			Timeout: 4 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}
 	srv.applyOwnership(dataDir)
@@ -1393,6 +1413,275 @@ func (s *Server) handleUploadsFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
+var (
+	reLinkTag  = regexp.MustCompile(`(?is)<link\b[^>]*>`)
+	reRelAttr  = regexp.MustCompile(`(?is)\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
+	reHrefAttr = regexp.MustCompile(`(?is)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
+)
+
+func attrValue(m []string) string {
+	for i := 1; i < len(m); i++ {
+		if m[i] != "" {
+			return strings.TrimSpace(m[i])
+		}
+	}
+	return ""
+}
+
+func extractHTMLIconHrefs(html string) []string {
+	var icons []string
+	var appleIcons []string
+	for _, tag := range reLinkTag.FindAllString(html, -1) {
+		relMatch := reRelAttr.FindStringSubmatch(tag)
+		hrefMatch := reHrefAttr.FindStringSubmatch(tag)
+		if len(relMatch) == 0 || len(hrefMatch) == 0 {
+			continue
+		}
+		rel := strings.ToLower(attrValue(relMatch))
+		href := attrValue(hrefMatch)
+		if href == "" || strings.HasPrefix(strings.ToLower(href), "javascript:") {
+			continue
+		}
+		tokens := strings.Fields(rel)
+		hasIcon := slices.Contains(tokens, "icon")
+		hasApple := slices.Contains(tokens, "apple-touch-icon") || slices.Contains(tokens, "apple-touch-icon-precomposed")
+		if hasIcon {
+			icons = append(icons, href)
+		} else if hasApple {
+			appleIcons = append(appleIcons, href)
+		}
+	}
+	return append(icons, appleIcons...)
+}
+
+func looksLikeImageBytes(data []byte, contentType, targetURL string) bool {
+	if len(data) == 0 {
+		return false
+	}
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "text/plain") || strings.HasPrefix(ct, "application/json") {
+		return false
+	}
+	trimmed := bytes.TrimSpace(data)
+	lowerPrefix := strings.ToLower(string(trimmed[:min(len(trimmed), 256)]))
+	if strings.HasPrefix(lowerPrefix, "<!doctype html") || strings.HasPrefix(lowerPrefix, "<html") {
+		return false
+	}
+	if strings.HasPrefix(ct, "image/") {
+		return true
+	}
+	if strings.Contains(lowerPrefix, "<svg") {
+		return true
+	}
+	sniff := strings.ToLower(http.DetectContentType(data))
+	if strings.HasPrefix(sniff, "image/") {
+		return true
+	}
+	// ICO magic bytes: 00 00 01 00 or 00 00 02 00
+	if len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0 {
+		return true
+	}
+	uLower := strings.ToLower(targetURL)
+	for ext := range allowedImageExts {
+		if strings.HasSuffix(uLower, ext) && !strings.HasPrefix(sniff, "text/") {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeImageContentType(data []byte, rawCT, targetURL string) string {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
+	if strings.HasPrefix(ct, "image/") {
+		return ct
+	}
+	trimmed := bytes.TrimSpace(data)
+	lowerPrefix := strings.ToLower(string(trimmed[:min(len(trimmed), 256)]))
+	if strings.Contains(lowerPrefix, "<svg") || strings.HasSuffix(strings.ToLower(targetURL), ".svg") {
+		return "image/svg+xml"
+	}
+	if len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0 {
+		return "image/x-icon"
+	}
+	sniff := http.DetectContentType(data)
+	if strings.HasPrefix(sniff, "image/") {
+		return sniff
+	}
+	return "image/x-icon"
+}
+
+func (s *Server) fetchImageCandidate(targetURL string) ([]byte, string, bool) {
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, "", false
+	}
+	req.Header.Set("User-Agent", "CaddyHome/1.0")
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	resp, err := s.faviconClient.Do(req)
+	if err != nil {
+		return nil, "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB max
+	if err != nil || len(data) == 0 {
+		return nil, "", false
+	}
+	ct := resp.Header.Get("Content-Type")
+	finalURL := targetURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	if !looksLikeImageBytes(data, ct, finalURL) {
+		return nil, "", false
+	}
+	return data, normalizeImageContentType(data, ct, finalURL), true
+}
+
+func (s *Server) discoverFaviconFromBase(baseURL string) ([]byte, string, bool) {
+	parsedBase, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || (parsedBase.Scheme != "http" && parsedBase.Scheme != "https") || parsedBase.Host == "" {
+		return nil, "", false
+	}
+	origin := parsedBase.Scheme + "://" + parsedBase.Host
+
+	// 1. Try /favicon.ico directly
+	if data, ct, ok := s.fetchImageCandidate(origin + "/favicon.ico"); ok {
+		return data, ct, true
+	}
+
+	// 2. Fetch root HTML page (following redirects) and inspect <link rel="icon" ...>
+	req, err := http.NewRequest(http.MethodGet, baseURL, nil)
+	if err == nil {
+		req.Header.Set("User-Agent", "CaddyHome/1.0")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+		if resp, err := s.faviconClient.Do(req); err == nil {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+			resp.Body.Close()
+			pageBase := parsedBase
+			if resp.Request != nil && resp.Request.URL != nil {
+				pageBase = resp.Request.URL
+			}
+			for _, href := range extractHTMLIconHrefs(string(bodyBytes)) {
+				refURL, err := pageBase.Parse(href)
+				if err != nil {
+					continue
+				}
+				if data, ct, ok := s.fetchImageCandidate(refURL.String()); ok {
+					return data, ct, true
+				}
+			}
+		}
+	}
+
+	// 3. Try common fallback paths (e.g. Home Assistant /static/icons/favicon.ico, /favicon.svg, /favicon.png, /apple-touch-icon.png)
+	for _, path := range []string{
+		"/static/icons/favicon.ico",
+		"/favicon.svg",
+		"/favicon.png",
+		"/apple-touch-icon.png",
+	} {
+		if data, ct, ok := s.fetchImageCandidate(origin + path); ok {
+			return data, ct, true
+		}
+	}
+
+	return nil, "", false
+}
+
+func (s *Server) isAllowedFaviconDomain(domain string) (*Service, bool) {
+	s.mu.RLock()
+	svc, ok := s.state.Services[domain]
+	if !ok || svc == nil {
+		s.mu.RUnlock()
+		return nil, false
+	}
+	cp := *svc
+	cp.Upstreams = slices.Clone(svc.Upstreams)
+	s.mu.RUnlock()
+	return &cp, true
+}
+
+func (s *Server) handleServiceFavicon(w http.ResponseWriter, r *http.Request) {
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	if domain == "" {
+		http.NotFound(w, r)
+		return
+	}
+	svc, ok := s.isAllowedFaviconDomain(domain)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	var candidates []string
+	addCandidate := func(u string) {
+		u = strings.TrimSpace(u)
+		if u != "" && !slices.Contains(candidates, u) {
+			candidates = append(candidates, u)
+		}
+	}
+	if svc.OverrideLanURL != nil && strings.TrimSpace(*svc.OverrideLanURL) != "" {
+		addCandidate(*svc.OverrideLanURL)
+	}
+	for _, up := range svc.Upstreams {
+		addCandidate(up)
+	}
+	if svc.ExternalURL != "" {
+		addCandidate(svc.ExternalURL)
+	} else if svc.Domain != "" {
+		addCandidate("https://" + svc.Domain)
+	}
+
+	cacheKey := domain + "|" + strings.Join(candidates, ",")
+	now := time.Now()
+
+	s.faviconMu.RLock()
+	cached, found := s.faviconCache[cacheKey]
+	s.faviconMu.RUnlock()
+	if found && now.Before(cached.expiresAt) {
+		if cached.notFound {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", cached.contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		_, _ = w.Write(cached.data)
+		return
+	}
+
+	for _, base := range candidates {
+		if data, ct, ok := s.discoverFaviconFromBase(base); ok {
+			s.faviconMu.Lock()
+			s.faviconCache[cacheKey] = cachedFavicon{
+				data:        data,
+				contentType: ct,
+				expiresAt:   now.Add(6 * time.Hour),
+			}
+			s.faviconMu.Unlock()
+
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			_, _ = w.Write(data)
+			return
+		}
+	}
+
+	s.faviconMu.Lock()
+	s.faviconCache[cacheKey] = cachedFavicon{
+		notFound:  true,
+		expiresAt: now.Add(2 * time.Minute),
+	}
+	s.faviconMu.Unlock()
+	http.NotFound(w, r)
+}
+
 func (s *Server) startBackgroundSync(initialSuccess bool) {
 	intervalSec := s.envConfig.SyncIntervalSeconds
 	if intervalSec < 5 {
@@ -1423,6 +1712,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 	mux.HandleFunc("GET /uploads/", s.handleUploadsFile)
+	mux.HandleFunc("GET /api/favicon", s.handleServiceFavicon)
 	mux.HandleFunc("GET /api/state", s.handleGetState)
 	mux.HandleFunc("POST /api/sync", s.handlePostSync)
 	mux.HandleFunc("PUT /api/state", s.handlePutState)

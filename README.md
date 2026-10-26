@@ -22,7 +22,7 @@ Built as a single static **Go** binary with an embedded zero-build SPA frontend 
 - **Drag & Drop Layout Editor:**
   - Reorder categories, drag service cards across categories, rename/delete categories, and hide internal services directly from the browser.
 - **Automatic Favicons + Custom Logos & Wallpapers:**
-  - Defaults to each service's own `/favicon.ico` (with automatic fallback to LAN favicon and an inline SVG server icon).
+  - Automatically discovers each service's favicon via `/api/favicon` (checks `/favicon.ico`, parses HTML `<link rel="icon">` / `apple-touch-icon`, and probes common paths like `/static/icons/favicon.ico` across LAN and external URLs, with client-side fallback and an inline SVG server icon).
   - Override any service logo via direct image upload, custom URL, or [walkxcode/dashboard-icons](https://github.com/walkxcode/dashboard-icons) slug.
 - **Built-in Themes & Custom Background:**
   - Includes 5 color themes (**Dark**, **Light**, **OLED Black**, **Nord**, **Catppuccin**) powered by CSS variables, plus custom background wallpaper upload with adjustable overlay opacity and card blur.
@@ -146,6 +146,7 @@ pve.example.com {
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/` | Serves the embedded single-page application (`index.html`). |
+| `GET` | `/api/favicon` | Discovers, proxies, and caches a service's favicon in RAM (`?domain=<domain>`). |
 | `GET` | `/api/state` | Returns the current in-memory JSON state (`< 1ms`, zero disk/network I/O). |
 | `POST` | `/api/sync` | Forces an immediate Caddy discovery & reconciliation cycle and returns the updated state. |
 | `PUT` | `/api/state` | Validates and atomically persists a full state update from the UI to `/data/config.json`. |

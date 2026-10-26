@@ -939,11 +939,14 @@
           if (svc.icon && svc.icon.trim() !== "") {
             return svc.icon.trim();
           }
-          // Default: link's own favicon
+          // Default: server-side favicon proxy (resolves /favicon.ico, <link rel="icon">, /static/icons/favicon.ico, etc.)
+          if (svc.domain) {
+            return "/api/favicon?domain=" + encodeURIComponent(svc.domain);
+          }
           const base = this.lanMode
-            ? (this.getLanUrl(svc) || svc.external_url || ("https://" + svc.domain))
-            : (svc.external_url || ("https://" + svc.domain));
-          return base.replace(/\/+$/, "") + "/favicon.ico";
+            ? (this.getLanUrl(svc) || svc.external_url || "")
+            : (svc.external_url || "");
+          return base ? (base.replace(/\/+$/, "") + "/favicon.ico") : FALLBACK_ICON_SVG;
         },
 
         getIconKey(svc) {
@@ -956,15 +959,28 @@
           const expectedKey = this.getIconKey(svc);
           if (img.dataset.lastIconKey !== expectedKey) {
             img.dataset.lastIconKey = expectedKey;
+            delete img.dataset.triedExternal;
             delete img.dataset.triedLan;
           }
+          const isAutoFavicon = !svc.icon || svc.icon.trim() === "";
+          const extBase = svc.external_url || (svc.domain ? ("https://" + svc.domain) : "");
+          const extFavicon = extBase ? (extBase.replace(/\/+$/, "") + "/favicon.ico") : "";
           const lanBase = this.getLanUrl(svc);
           const lanFavicon = lanBase ? (lanBase.replace(/\/+$/, "") + "/favicon.ico") : "";
-          // If external favicon failed and LAN URL is different, try LAN favicon once before SVG fallback
-          if (!img.dataset.triedLan && lanFavicon && lanFavicon !== expectedPrimary && (!svc.icon || svc.icon.trim() === "")) {
-            img.dataset.triedLan = "1";
-            img.src = lanFavicon;
-            return;
+
+          if (isAutoFavicon) {
+            const firstDirect = this.lanMode ? (lanFavicon || extFavicon) : (extFavicon || lanFavicon);
+            const secondDirect = this.lanMode ? extFavicon : lanFavicon;
+            if (!img.dataset.triedExternal && firstDirect && firstDirect !== expectedPrimary) {
+              img.dataset.triedExternal = "1";
+              img.src = firstDirect;
+              return;
+            }
+            if (!img.dataset.triedLan && secondDirect && secondDirect !== firstDirect && secondDirect !== expectedPrimary) {
+              img.dataset.triedLan = "1";
+              img.src = secondDirect;
+              return;
+            }
           }
           if (img.src !== FALLBACK_ICON_SVG) {
             img.src = FALLBACK_ICON_SVG;

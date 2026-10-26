@@ -609,17 +609,23 @@ app.initSortable = () => {};
 assert.strictEqual(app.getLanUrl({ domain: "a.com", external_url: "https://a.com", upstreams: [] }), "");
 assert.strictEqual(app.getLanUrl({ domain: "a.com", external_url: "https://a.com", upstreams: ["http://10.0.0.1:8080"] }), "http://10.0.0.1:8080");
 
-// 2. Test handleIconError tries LAN favicon once and resets triedLan when icon/LAN key changes
+// 2. Test getIconUrl uses /api/favicon proxy and handleIconError falls back to direct external, LAN, then SVG
 const svcWithLan = { domain: "a.com", external_url: "https://a.com", upstreams: ["http://10.0.0.1:8080"], icon: "" };
-const img = { src: "https://a.com/favicon.ico", dataset: {} };
+assert.strictEqual(app.getIconUrl(svcWithLan), "/api/favicon?domain=a.com");
+const img = { src: "/api/favicon?domain=a.com", dataset: {} };
+app.handleIconError({ target: img }, svcWithLan);
+assert.strictEqual(img.src, "https://a.com/favicon.ico");
+assert.strictEqual(img.dataset.triedExternal, "1");
 app.handleIconError({ target: img }, svcWithLan);
 assert.strictEqual(img.src, "http://10.0.0.1:8080/favicon.ico");
 assert.strictEqual(img.dataset.triedLan, "1");
-// Second error falls back to SVG
+// Third error falls back to SVG
 app.handleIconError({ target: img }, svcWithLan);
 assert.strictEqual(img.src, FALLBACK_ICON_SVG);
-// Changing override_lan_url resets triedLan and tries the new LAN favicon
+// Changing override_lan_url resets state and retries external then new LAN favicon
 svcWithLan.override_lan_url = "http://10.0.0.2:9090";
+app.handleIconError({ target: img }, svcWithLan);
+assert.strictEqual(img.src, "https://a.com/favicon.ico");
 app.handleIconError({ target: img }, svcWithLan);
 assert.strictEqual(img.src, "http://10.0.0.2:9090/favicon.ico");
 
@@ -693,5 +699,64 @@ app.deleteCategory("cat_media").then(() => {
 		t.Fatalf("Frontend JS test failed: %v\nOutput:\n%s", err, string(out))
 	}
 }
+
+func TestServiceFaviconProxyDiscovery(t *testing.T) {
+	// Simulate Home Assistant: /favicon.ico returns 404, root / serves HTML with <link rel='shortcut icon' href='/static/icons/favicon.ico'>
+	fakeICO := []byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10}
+	haServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/favicon.ico":
+			http.NotFound(w, r)
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!DOCTYPE html><html><head><link rel="shortcut icon" href="/static/icons/favicon.ico"><link rel="mask-icon" href="/static/icons/favicon-mask.svg"></head><body>Home Assistant</body></html>`))
+		case "/static/icons/favicon.ico":
+			w.Header().Set("Content-Type", "image/x-icon")
+			_, _ = w.Write(fakeICO)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer haServer.Close()
+
+	srv, err := NewServer(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	srv.state.Services["homeassistant.orangebastion.com"] = &Service{
+		Domain:      "homeassistant.orangebastion.com",
+		CustomName:  "Homeassistant",
+		ExternalURL: "https://homeassistant.orangebastion.com",
+		Upstreams:   []string{haServer.URL},
+		Active:      true,
+	}
+	srv.mu.Unlock()
+
+	handler := srv.routes()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/favicon?domain=homeassistant.orangebastion.com", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected GET /api/favicon to return 200, got %d", rec.Code)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), fakeICO) {
+		t.Fatalf("expected favicon payload %v, got %v", fakeICO, rec.Body.Bytes())
+	}
+	if rec.Header().Get("Content-Type") != "image/x-icon" {
+		t.Fatalf("expected Content-Type image/x-icon, got %q", rec.Header().Get("Content-Type"))
+	}
+
+	// Unknown domain must return 404 (prevents open SSRF)
+	reqUnknown := httptest.NewRequest(http.MethodGet, "/api/favicon?domain=unknown.example.com", nil)
+	recUnknown := httptest.NewRecorder()
+	handler.ServeHTTP(recUnknown, reqUnknown)
+	if recUnknown.Code != http.StatusNotFound {
+		t.Fatalf("expected unknown domain to return 404, got %d", recUnknown.Code)
+	}
+}
+
 
 
