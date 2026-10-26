@@ -180,7 +180,7 @@
   <template x-if="state.settings.background_image">
     <div class="fixed inset-0 z-0 pointer-events-none">
       <div class="absolute inset-0 bg-cover bg-center bg-no-repeat"
-           :style="`background-image: url('${state.settings.background_image}')`"></div>
+           :style="`background-image: ${cssUrl(state.settings.background_image)}`"></div>
       <div class="absolute inset-0"
            :style="`background-color: rgba(var(--bg-page-rgb), ${state.settings.background_overlay_opacity ?? 0.75})`"></div>
     </div>
@@ -196,16 +196,10 @@
         <!-- Brand & Active Count -->
         <div class="flex items-center gap-3">
           <img src="/favicon.svg" alt="CaddyHome Logo" class="w-9 h-9 rounded-xl shadow-sm select-none shrink-0" />
-          <div>
-            <div class="flex items-center gap-2">
-              <h1 class="text-lg font-bold tracking-tight" x-text="state.settings.title || 'CaddyHome'"></h1>
-              <span class="text-xs px-2 py-0.5 rounded-full font-medium theme-accent-badge"
-                    x-text="`${activeServiceCount()} attivi`"></span>
-            </div>
-            <p class="text-xs theme-muted hidden sm:block">
-              <span x-show="!lanMode">Click principale: <strong>HTTPS Esterno</strong></span>
-              <span x-show="lanMode" class="theme-warn-text font-medium">Modalità click: <strong>IP LAN Diretto</strong></span>
-            </p>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight" x-text="state.settings.title || 'CaddyHome'"></h1>
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium theme-accent-badge"
+                  x-text="`${activeServiceCount()} attivi`"></span>
           </div>
         </div>
 
@@ -231,17 +225,6 @@
 
         <!-- Right Controls -->
         <div class="flex items-center gap-2 order-2 md:order-3">
-
-          <!-- Global LAN Mode Toggle -->
-          <button
-            @click="toggleLanMode()"
-            :class="lanMode ? 'theme-warn-badge' : 'opacity-85 hover:opacity-100'"
-            class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition"
-            style="border-color: var(--border-card);"
-            title="Commuta click principale tra dominio HTTPS esterno e IP LAN diretto">
-            <span class="w-2 h-2 rounded-full" :class="lanMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'"></span>
-            <span x-text="lanMode ? 'LAN ON' : 'HTTPS'"></span>
-          </button>
 
           <!-- Theme & Appearance Button -->
           <button
@@ -340,10 +323,10 @@
 
       <!-- Categories Container (Sortable in Edit Mode) -->
       <div id="categories-root" class="space-y-8">
-        <template x-for="cat in sortedCategories()" :key="cat.id + '-' + renderKey">
+        <template x-for="cat in categoriesWithServices()" :key="cat.id + '-' + renderKey">
           <section
             :data-category-id="cat.id"
-            x-show="editMode || servicesForCategory(cat.id).length > 0"
+            x-show="editMode || cat.services.length > 0"
             class="space-y-3">
 
             <!-- Category Header -->
@@ -354,7 +337,7 @@
                 </span>
                 <h2 class="text-sm font-semibold uppercase tracking-wider theme-muted" x-text="cat.name"></h2>
                 <span class="text-xs px-2 py-0.5 rounded-full theme-chip theme-muted"
-                      x-text="servicesForCategory(cat.id).length"></span>
+                      x-text="cat.services.length"></span>
               </div>
 
               <!-- Category Edit Actions -->
@@ -380,7 +363,7 @@
               :class="editMode ? 'p-2 rounded-2xl border border-dashed border-slate-500/40' : ''"
               :data-category-id="cat.id">
 
-              <template x-for="svc in servicesForCategory(cat.id)" :key="svc.domain + '-' + renderKey">
+              <template x-for="svc in cat.services" :key="svc.domain + '-' + renderKey">
                 <div
                   :data-domain="svc.domain"
                   @click="handleCardClick(svc)"
@@ -755,11 +738,11 @@
           services: {}
         },
         searchQuery: "",
-        lanMode: localStorage.getItem("caddyhome_lan_mode") === "true",
         editMode: false,
         showHidden: false,
         syncing: false,
         toastMessage: "",
+        toastTimer: null,
         sortableInstances: [],
         renderKey: 0,
 
@@ -809,10 +792,26 @@
         },
 
         showToast(msg) {
+          if (this.toastTimer) {
+            clearTimeout(this.toastTimer);
+          }
           this.toastMessage = msg;
-          setTimeout(() => {
+          this.toastTimer = setTimeout(() => {
             if (this.toastMessage === msg) this.toastMessage = "";
+            this.toastTimer = null;
           }, 2800);
+        },
+
+        cssUrl(url) {
+          if (!url) return "none";
+          return `url('${String(url).replace(/['"()\\]/g, "\\$&")}')`;
+        },
+
+        refreshGrid() {
+          this.renderKey++;
+          if (this.editMode) {
+            this.$nextTick(() => this.initSortable());
+          }
         },
 
         applyTheme(themeName) {
@@ -842,10 +841,7 @@
             if (!res.ok) throw new Error("HTTP " + res.status);
             this.state = await res.json();
             this.applyTheme(this.state.settings?.theme);
-            this.renderKey++;
-            if (this.editMode) {
-              this.$nextTick(() => this.initSortable());
-            }
+            this.refreshGrid();
             this.showToast("Sincronizzazione con Caddy completata");
           } catch (err) {
             console.error("Sync failed:", err);
@@ -872,16 +868,10 @@
           }
         },
 
-        toggleLanMode() {
-          this.lanMode = !this.lanMode;
-          localStorage.setItem("caddyhome_lan_mode", String(this.lanMode));
-        },
-
         toggleShowHidden() {
           this.showHidden = !this.showHidden;
           if (this.editMode) {
-            this.renderKey++;
-            this.$nextTick(() => this.initSortable());
+            this.refreshGrid();
           }
         },
 
@@ -897,22 +887,44 @@
           return [...(this.state.categories || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         },
 
+        matchesServiceFilter(svc, q) {
+          if (!svc) return false;
+          if (svc.hidden && !(this.editMode && this.showHidden)) return false;
+          if (!q) return true;
+          const nameMatch = (svc.custom_name || "").toLowerCase().includes(q);
+          const domMatch = (svc.domain || "").toLowerCase().includes(q);
+          const upMatch = (svc.upstreams || []).some(u => u.toLowerCase().includes(q));
+          const ovMatch = (svc.override_lan_url || "").toLowerCase().includes(q);
+          return nameMatch || domMatch || upMatch || ovMatch;
+        },
+
         servicesForCategory(catId) {
           const q = this.searchQuery.trim().toLowerCase();
           return Object.values(this.state.services || {})
-            .filter(svc => {
-              if (!svc) return false;
-              const targetCat = svc.category_id || "cat_uncat";
-              if (targetCat !== catId) return false;
-              if (svc.hidden && !(this.editMode && this.showHidden)) return false;
-              if (!q) return true;
-              const nameMatch = (svc.custom_name || "").toLowerCase().includes(q);
-              const domMatch = (svc.domain || "").toLowerCase().includes(q);
-              const upMatch = (svc.upstreams || []).some(u => u.toLowerCase().includes(q));
-              const ovMatch = (svc.override_lan_url || "").toLowerCase().includes(q);
-              return nameMatch || domMatch || upMatch || ovMatch;
-            })
+            .filter(svc => (svc?.category_id || "cat_uncat") === catId && this.matchesServiceFilter(svc, q))
             .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        },
+
+        categoriesWithServices() {
+          const q = this.searchQuery.trim().toLowerCase();
+          const grouped = new Map();
+          for (const svc of Object.values(this.state.services || {})) {
+            if (!this.matchesServiceFilter(svc, q)) continue;
+            const catId = svc.category_id || "cat_uncat";
+            let list = grouped.get(catId);
+            if (!list) {
+              list = [];
+              grouped.set(catId, list);
+            }
+            list.push(svc);
+          }
+          for (const list of grouped.values()) {
+            list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          }
+          return this.sortedCategories().map(cat => ({
+            ...cat,
+            services: grouped.get(cat.id) || []
+          }));
         },
 
         getLanUrl(svc) {
@@ -928,9 +940,6 @@
 
         getPrimaryUrl(svc) {
           if (!svc) return "#";
-          if (this.lanMode) {
-            return this.getLanUrl(svc) || svc.external_url || ("https://" + svc.domain);
-          }
           return svc.external_url || ("https://" + svc.domain);
         },
 
@@ -943,9 +952,7 @@
           if (svc.domain) {
             return "/api/favicon?domain=" + encodeURIComponent(svc.domain);
           }
-          const base = this.lanMode
-            ? (this.getLanUrl(svc) || svc.external_url || "")
-            : (svc.external_url || "");
+          const base = svc.external_url || "";
           return base ? (base.replace(/\/+$/, "") + "/favicon.ico") : FALLBACK_ICON_SVG;
         },
 
@@ -969,8 +976,8 @@
           const lanFavicon = lanBase ? (lanBase.replace(/\/+$/, "") + "/favicon.ico") : "";
 
           if (isAutoFavicon) {
-            const firstDirect = this.lanMode ? (lanFavicon || extFavicon) : (extFavicon || lanFavicon);
-            const secondDirect = this.lanMode ? extFavicon : lanFavicon;
+            const firstDirect = extFavicon || lanFavicon;
+            const secondDirect = lanFavicon;
             if (!img.dataset.triedExternal && firstDirect && firstDirect !== expectedPrimary) {
               img.dataset.triedExternal = "1";
               img.src = firstDirect;
@@ -1018,6 +1025,10 @@
 
         initSortable() {
           this.destroySortable();
+          const onSortEnd = () => {
+            this.syncOrderFromDOM();
+            this.refreshGrid();
+          };
           const catRoot = document.getElementById("categories-root");
           if (catRoot) {
             this.sortableInstances.push(
@@ -1026,11 +1037,7 @@
                 draggable: "section[data-category-id]",
                 handle: ".cat-drag-handle",
                 ghostClass: "sortable-ghost",
-                onEnd: () => {
-                  this.syncOrderFromDOM();
-                  this.renderKey++;
-                  this.$nextTick(() => this.initSortable());
-                }
+                onEnd: onSortEnd
               })
             );
           }
@@ -1041,11 +1048,7 @@
                 animation: 150,
                 draggable: "[data-domain]",
                 ghostClass: "sortable-ghost",
-                onEnd: () => {
-                  this.syncOrderFromDOM();
-                  this.renderKey++;
-                  this.$nextTick(() => this.initSortable());
-                }
+                onEnd: onSortEnd
               })
             );
           });
@@ -1126,7 +1129,7 @@
         },
 
         applyDashboardIconSlug() {
-          const slug = this.serviceModal.iconSlug.trim().toLowerCase().replace(/\.png$/, "");
+          const slug = this.serviceModal.iconSlug.trim().toLowerCase().replace(/^\/+/, "").replace(/\.png$/, "");
           if (!slug) return;
           this.serviceModal.form.icon = `https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/${slug}.png`;
         },
@@ -1146,13 +1149,13 @@
           return data.url;
         },
 
-        async uploadServiceIcon(event) {
+        async handleFileInputUpload(event, applyUrl, successToast) {
           const file = event.target.files?.[0];
           if (!file) return;
           try {
             const url = await this.uploadFileHelper(file);
-            this.serviceModal.form.icon = url;
-            this.showToast("Logo caricato");
+            applyUrl(url);
+            this.showToast(successToast);
           } catch (err) {
             this.showToast("Errore upload: " + err.message);
           } finally {
@@ -1160,18 +1163,12 @@
           }
         },
 
+        async uploadServiceIcon(event) {
+          await this.handleFileInputUpload(event, url => { this.serviceModal.form.icon = url; }, "Logo caricato");
+        },
+
         async uploadBackgroundImage(event) {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          try {
-            const url = await this.uploadFileHelper(file);
-            this.appearanceModal.form.background_image = url;
-            this.showToast("Sfondo caricato");
-          } catch (err) {
-            this.showToast("Errore upload: " + err.message);
-          } finally {
-            event.target.value = "";
-          }
+          await this.handleFileInputUpload(event, url => { this.appearanceModal.form.background_image = url; }, "Sfondo caricato");
         },
 
         async saveServiceModal() {
@@ -1191,10 +1188,7 @@
           target.hidden = Boolean(f.hidden);
           this.serviceModal.open = false;
           await this.persistState("Servizio aggiornato");
-          this.renderKey++;
-          if (this.editMode) {
-            this.$nextTick(() => this.initSortable());
-          }
+          this.refreshGrid();
         },
 
         async deleteService(domain) {
@@ -1202,10 +1196,7 @@
           delete this.state.services[domain];
           this.serviceModal.open = false;
           await this.persistState("Servizio eliminato");
-          this.renderKey++;
-          if (this.editMode) {
-            this.$nextTick(() => this.initSortable());
-          }
+          this.refreshGrid();
         },
 
         openCategoryModal(cat = null) {
@@ -1240,10 +1231,7 @@
           }
           this.categoryModal.open = false;
           await this.persistState("Categoria salvata");
-          this.renderKey++;
-          if (this.editMode) {
-            this.$nextTick(() => this.initSortable());
-          }
+          this.refreshGrid();
         },
 
         async deleteCategory(catId) {
@@ -1261,10 +1249,7 @@
               svc.order = nextOrd++;
             });
           await this.persistState("Categoria eliminata");
-          this.renderKey++;
-          if (this.editMode) {
-            this.$nextTick(() => this.initSortable());
-          }
+          this.refreshGrid();
         },
 
         openAppearanceModal() {

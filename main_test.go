@@ -26,6 +26,7 @@ func TestNormalizeUpstream(t *testing.T) {
 		{"localhost:3000", "192.168.1.10", false, "http://localhost:3000"},
 		{"https://192.168.1.2:8006", "192.168.1.10", false, "https://192.168.1.2:8006"},
 		{"192.168.1.2:8006", "192.168.1.10", false, "https://192.168.1.2:8006"},
+		{"http://192.168.1.2:8443", "192.168.1.10", false, "http://192.168.1.2:8443"},
 		{"proxmox:9443", "192.168.1.10", false, "https://192.168.1.10:9443"},
 		{"10.0.0.5:8080", "192.168.1.10", true, "https://10.0.0.5:8080"},
 	}
@@ -34,6 +35,16 @@ func TestNormalizeUpstream(t *testing.T) {
 		if got != tc.expected {
 			t.Errorf("normalizeUpstream(%q, %q, %v) = %q; want %q", tc.raw, tc.lanIP, tc.hasTLS, got, tc.expected)
 		}
+	}
+
+	if isValidConcreteDomain("https://*.example.com") || isValidConcreteDomain("http://*.example.com") {
+		t.Errorf("expected wildcard domain with scheme prefix to be rejected")
+	}
+	if got := cleanDomainToken("HTTPS://Sub.Example.com:8443/path, "); got != "sub.example.com" {
+		t.Errorf("cleanDomainToken failed on uppercase scheme/trailing comma space: got %q", got)
+	}
+	if got := resolveMagicIcon(" /Jellyfin.PNG "); got != "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png" {
+		t.Errorf("resolveMagicIcon failed on mixed-case slug: got %q", got)
 	}
 }
 
@@ -374,6 +385,7 @@ concrete.domain.com {
 	@ws header Connection *Upgrade*
 	reverse_proxy @ws 192.168.1.95:5000
 	reverse_proxy /api/* 192.168.1.95:5001
+	handle_path /v2/* { reverse_proxy 192.168.1.95:5002 }
 }
 `
 	res := parseCaddyfileContent(sample, "192.168.1.10")
@@ -411,8 +423,8 @@ concrete.domain.com {
 	}
 
 	conc := res["concrete.domain.com"]
-	if conc == nil || !slices.Equal(conc.Upstreams, []string{"http://192.168.1.95:5000", "http://192.168.1.95:5001"}) {
-		t.Fatalf("expected non-host matcher @ws and path matcher /api/* on concrete domain to preserve upstreams, got %+v", conc)
+	if conc == nil || !slices.Equal(conc.Upstreams, []string{"http://192.168.1.95:5000", "http://192.168.1.95:5001", "http://192.168.1.95:5002"}) {
+		t.Fatalf("expected non-host matcher @ws, path matcher /api/*, and inline handle_path on concrete domain to preserve upstreams, got %+v", conc)
 	}
 }
 
@@ -682,7 +694,7 @@ app.closeAppearanceModal();
 assert.strictEqual(currentThemeAttr, "dark");
 assert.strictEqual(app.appearanceModal.open, false);
 
-// 5. Test deleteCategory assigns non-colliding orders in cat_uncat
+// 5. Test deleteCategory assigns non-colliding orders in cat_uncat & categoriesWithServices groups in single pass
 app.state.services["u.com"] = { domain: "u.com", category_id: "cat_uncat", order: 0, hidden: false };
 app.deleteCategory("cat_media").then(() => {
   assert.strictEqual(app.state.services["b.com"].category_id, "cat_uncat");
@@ -690,6 +702,17 @@ app.deleteCategory("cat_media").then(() => {
   assert.strictEqual(app.state.services["u.com"].order, 0);
   assert.strictEqual(app.state.services["b.com"].order, 1);
   assert.strictEqual(app.state.services["a.com"].order, 2);
+
+  const grouped = app.categoriesWithServices();
+  const uncatGroup = grouped.find(c => c.id === "cat_uncat");
+  assert.strictEqual(uncatGroup.services.length, 3);
+  assert.deepStrictEqual(uncatGroup.services.map(s => s.domain), ["u.com", "b.com", "a.com"]);
+
+  // 6. Test cssUrl escaping and applyDashboardIconSlug leading slash handling
+  assert.strictEqual(app.cssUrl("/uploads/my'bg(1).png"), "url('/uploads/my\\'bg\\(1\\).png')");
+  app.serviceModal.iconSlug = " /Jellyfin.png ";
+  app.applyDashboardIconSlug();
+  assert.strictEqual(app.serviceModal.form.icon, "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png");
 });
 `
 

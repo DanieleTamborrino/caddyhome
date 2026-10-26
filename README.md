@@ -16,9 +16,9 @@ Built as a single static **Go** binary with an embedded zero-build SPA frontend 
   - **`file`:** Parses standard `Caddyfile` site blocks, multi-domain blocks, wildcard (`*.domain.tld`) blocks using `@matcher` + `handle @matcher`, and optional **magic comments** (`# @name`, `# @category`, `# @icon`).
 - **Non-Destructive Reconciliation:**
   - Automatically adds newly discovered domains, updates internal LAN `upstreams`, and flags removed services as `Orphaned` (`active: false`) **without ever overwriting** user customizations made in the UI.
-- **Dual-Link Navigation (External HTTPS vs. Direct LAN IP):**
-  - **Primary Card Click:** Opens `https://<domain>` by default, or switches globally to direct LAN IP (`http(s)://<ip>:<port>`) when the **LAN Mode** toggle is enabled.
-  - **Direct LAN Badge:** Every card includes a dedicated `LAN <ip>:<port>` pill that always opens the internal upstream directly—even when global LAN Mode is off—plus a dropdown for multi-upstream load-balanced services.
+- **Dual-Link Navigation (External HTTPS & Direct LAN IP):**
+  - **Primary Card Click:** Opens `https://<domain>`.
+  - **Direct LAN Badge:** Every card includes a dedicated `LAN <ip>:<port>` pill that opens the internal upstream directly, plus a dropdown for multi-upstream load-balanced services.
 - **Drag & Drop Layout Editor:**
   - Reorder categories, drag service cards across categories, rename/delete categories, and hide internal services directly from the browser.
 - **Automatic Favicons + Custom Logos & Wallpapers:**
@@ -134,7 +134,6 @@ pve.example.com {
 | Feature | How to Use |
 | :--- | :--- |
 | **Instant Search (`/`)** | Press `/` anywhere on the page to filter services by name, domain, or LAN `IP:Port`. Press `Esc` to clear. |
-| **LAN Mode Toggle** | Click **`HTTPS` / `LAN ON`** in the top bar to switch the main card click between external `https://<domain>` and internal LAN URLs. |
 | **Edit Layout (`Modifica`)** | Click **`Modifica`** to drag-and-drop cards between categories, reorder categories, create/rename categories, or edit individual cards. Click **`Salva`** to persist. |
 | **Custom Logos & Favicons** | In Edit Mode, click a card to set a custom image URL, upload an image file, apply a `dashboard-icons` slug, or reset to automatic `/favicon.ico`. |
 | **Themes & Wallpaper** | Click the palette icon in the top bar to switch between `Dark`, `Light`, `OLED`, `Nord`, and `Catppuccin`, or upload a custom background image. |

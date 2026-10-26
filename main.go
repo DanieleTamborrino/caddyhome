@@ -152,14 +152,18 @@ func defaultSettings() Settings {
 	}
 }
 
+func defaultCategories() []Category {
+	return []Category{
+		{ID: "cat_main", Name: "Main Services", Order: 0},
+		{ID: "cat_uncat", Name: "Uncategorized", Order: 99},
+	}
+}
+
 func defaultState() AppState {
 	return AppState{
-		Settings: defaultSettings(),
-		Categories: []Category{
-			{ID: "cat_main", Name: "Main Services", Order: 0},
-			{ID: "cat_uncat", Name: "Uncategorized", Order: 99},
-		},
-		Services: make(map[string]*Service),
+		Settings:   defaultSettings(),
+		Categories: defaultCategories(),
+		Services:   make(map[string]*Service),
 	}
 }
 
@@ -177,18 +181,27 @@ func ensureStateDefaults(st *AppState) {
 	if st.Services == nil {
 		st.Services = make(map[string]*Service)
 	}
+	var cleanedCats []Category
+	seenCats := make(map[string]bool, len(st.Categories))
 	hasUncat := false
 	for _, c := range st.Categories {
+		c.ID = strings.TrimSpace(c.ID)
+		c.Name = strings.TrimSpace(c.Name)
+		if c.ID == "" || seenCats[c.ID] {
+			continue
+		}
+		if c.Name == "" {
+			c.Name = c.ID
+		}
+		seenCats[c.ID] = true
 		if c.ID == "cat_uncat" {
 			hasUncat = true
-			break
 		}
+		cleanedCats = append(cleanedCats, c)
 	}
+	st.Categories = cleanedCats
 	if len(st.Categories) == 0 {
-		st.Categories = []Category{
-			{ID: "cat_main", Name: "Main Services", Order: 0},
-			{ID: "cat_uncat", Name: "Uncategorized", Order: 99},
-		}
+		st.Categories = defaultCategories()
 	} else if !hasUncat {
 		st.Categories = append(st.Categories, Category{
 			ID:    "cat_uncat",
@@ -235,6 +248,8 @@ func NewServer(configPath string) (*Server, error) {
 	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create uploads dir: %w", err)
 	}
+	favTransport := http.DefaultTransport.(*http.Transport).Clone()
+	favTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	srv := &Server{
 		configPath:   configPath,
 		uploadsDir:   uploadsDir,
@@ -242,10 +257,8 @@ func NewServer(configPath string) (*Server, error) {
 		state:        defaultState(),
 		faviconCache: make(map[string]cachedFavicon),
 		faviconClient: &http.Client{
-			Timeout: 4 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
+			Timeout:   4 * time.Second,
+			Transport: favTransport,
 		},
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}
@@ -280,8 +293,8 @@ func (s *Server) loadState() error {
 	ensureStateDefaults(&loaded)
 	s.mu.Lock()
 	s.state = loaded
-	if normalized, err := json.MarshalIndent(s.state, "", "  "); err == nil && string(normalized) != strings.TrimSpace(string(data)) {
-		_ = s.saveStateLocked()
+	if normalized, err := json.MarshalIndent(s.state, "", "  "); err == nil && !bytes.Equal(bytes.TrimSpace(normalized), bytes.TrimSpace(data)) {
+		_ = s.saveStatePayloadLocked(normalized)
 	} else {
 		s.applyOwnership(s.configPath)
 	}
@@ -291,15 +304,19 @@ func (s *Server) loadState() error {
 
 // saveStateLocked writes state atomically to configPath. Caller must hold s.mu.
 func (s *Server) saveStateLocked() error {
+	payload, err := json.MarshalIndent(s.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return s.saveStatePayloadLocked(payload)
+}
+
+func (s *Server) saveStatePayloadLocked(payload []byte) error {
 	dataDir := filepath.Dir(s.configPath)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
 	s.applyOwnership(dataDir)
-	payload, err := json.MarshalIndent(s.state, "", "  ")
-	if err != nil {
-		return err
-	}
 	tmpPath := s.configPath + ".tmp"
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -330,10 +347,13 @@ func normalizeUpstream(raw, defaultLanIP string, hasTLS bool) string {
 		return ""
 	}
 	forcedHTTPS := false
-	if strings.HasPrefix(strings.ToLower(target), "https://") {
+	forcedHTTP := false
+	lowerTarget := strings.ToLower(target)
+	if strings.HasPrefix(lowerTarget, "https://") {
 		forcedHTTPS = true
 		target = target[8:]
-	} else if strings.HasPrefix(strings.ToLower(target), "http://") {
+	} else if strings.HasPrefix(lowerTarget, "http://") {
+		forcedHTTP = true
 		target = target[7:]
 	}
 	if slashIdx := strings.IndexByte(target, '/'); slashIdx != -1 {
@@ -370,7 +390,7 @@ func normalizeUpstream(raw, defaultLanIP string, hasTLS bool) string {
 	scheme := "http"
 	if forcedHTTPS || hasTLS {
 		scheme = "https"
-	} else {
+	} else if !forcedHTTP {
 		switch port {
 		case "443", "8006", "8443", "9443":
 			scheme = "https"
@@ -384,18 +404,15 @@ func normalizeUpstream(raw, defaultLanIP string, hasTLS bool) string {
 }
 
 func isValidConcreteDomain(d string) bool {
-	d = strings.TrimSpace(d)
-	if d == "" || strings.HasPrefix(d, "*.") || d == "*" || strings.HasPrefix(d, ":") || strings.HasPrefix(d, "http://") && !strings.Contains(d[7:], ".") {
+	d = cleanDomainToken(d)
+	if d == "" || strings.Contains(d, "*") || strings.HasPrefix(d, ":") {
 		return false
-	}
-	d = strings.TrimPrefix(strings.TrimPrefix(d, "https://"), "http://")
-	if colonIdx := strings.IndexByte(d, ':'); colonIdx != -1 {
-		d = d[:colonIdx]
 	}
 	return strings.Contains(d, ".") && !strings.ContainsAny(d, " \t{}")
 }
 
 func cleanDomainToken(token string) string {
+	token = strings.ToLower(strings.TrimSpace(token))
 	token = strings.TrimSpace(strings.TrimSuffix(token, ","))
 	token = strings.TrimPrefix(strings.TrimPrefix(token, "https://"), "http://")
 	if slashIdx := strings.IndexByte(token, '/'); slashIdx != -1 {
@@ -404,7 +421,7 @@ func cleanDomainToken(token string) string {
 	if colonIdx := strings.IndexByte(token, ':'); colonIdx != -1 {
 		token = token[:colonIdx]
 	}
-	return strings.ToLower(strings.TrimSpace(token))
+	return strings.TrimSpace(token)
 }
 
 func resolveMagicIcon(raw string) string {
@@ -412,10 +429,11 @@ func resolveMagicIcon(raw string) string {
 	if val == "" {
 		return ""
 	}
-	if strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://") || strings.HasPrefix(val, "/uploads/") || strings.HasPrefix(val, "data:") {
+	lowerVal := strings.ToLower(val)
+	if strings.HasPrefix(lowerVal, "http://") || strings.HasPrefix(lowerVal, "https://") || strings.HasPrefix(val, "/uploads/") || strings.HasPrefix(lowerVal, "data:") {
 		return val
 	}
-	slug := strings.TrimSuffix(strings.TrimPrefix(val, "/"), ".png")
+	slug := strings.TrimSuffix(strings.TrimPrefix(lowerVal, "/"), ".png")
 	return fmt.Sprintf("https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/%s.png", slug)
 }
 
@@ -814,18 +832,12 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 				rpDirectMatcher = ""
 
 				// Single-line directive inside `{ ... }`
-				if closeIdx := strings.LastIndexByte(rest, '}'); closeIdx != -1 {
-					inner := strings.TrimSpace(rest[:closeIdx])
-					if strings.Contains(inner, "tls") && strings.Contains(inner, "transport") {
+				if rpIdx := strings.Index(rest, "reverse_proxy"); rpIdx != -1 {
+					rpPart := rest[rpIdx+len("reverse_proxy"):]
+					topRawUpstreams = append(topRawUpstreams, extractReverseProxyTargets(strings.Fields(rpPart))...)
+					if strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls") {
 						topHasTLS = true
 					}
-					if rpIdx := strings.Index(inner, "reverse_proxy"); rpIdx != -1 {
-						rpTokens := strings.Fields(inner[rpIdx+len("reverse_proxy"):])
-						topRawUpstreams = append(topRawUpstreams, extractReverseProxyTargets(rpTokens)...)
-					}
-				} else if rpIdx := strings.Index(rest, "reverse_proxy"); rpIdx != -1 {
-					rpTokens := strings.Fields(rest[rpIdx+len("reverse_proxy"):])
-					topRawUpstreams = append(topRawUpstreams, extractReverseProxyTargets(rpTokens)...)
 				}
 			} else {
 				topDomains = nil
@@ -880,7 +892,8 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 				}
 
 				// 2. Entering `handle @matcher {` or `route @matcher {` for a known host matcher
-				if activeHandleMatcher == "" && (tokens[0] == "handle" || tokens[0] == "route") && len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") && len(matcherDomains[tokens[1]]) > 0 && opens > 0 {
+				isHandlerDirective := tokens[0] == "handle" || tokens[0] == "handle_path" || tokens[0] == "route"
+				if activeHandleMatcher == "" && isHandlerDirective && len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") && len(matcherDomains[tokens[1]]) > 0 && opens > 0 {
 					activeHandleMatcher = tokens[1]
 					handleStartDepth = prevDepth
 					handleRawUpstreams = nil
@@ -891,10 +904,27 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 					// Check if single-line `handle @matcher { reverse_proxy ... }`
 					if rpIdx := strings.Index(line, "reverse_proxy"); rpIdx != -1 {
 						rpPart := line[rpIdx+len("reverse_proxy"):]
-						rpTokens := strings.Fields(rpPart)
-						handleRawUpstreams = append(handleRawUpstreams, extractReverseProxyTargets(rpTokens)...)
+						handleRawUpstreams = append(handleRawUpstreams, extractReverseProxyTargets(strings.Fields(rpPart))...)
 						if strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls") {
 							handleHasTLS = true
+						}
+					}
+				} else if isHandlerDirective && strings.Contains(line, "reverse_proxy") {
+					// Single-line `handle /path/* { reverse_proxy ... }` or `handle_path /api/* { reverse_proxy ... }`
+					if rpIdx := strings.Index(line, "reverse_proxy"); rpIdx != -1 {
+						rpPart := line[rpIdx+len("reverse_proxy"):]
+						targets := extractReverseProxyTargets(strings.Fields(rpPart))
+						inlineTLS := strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls")
+						if activeHandleMatcher != "" {
+							handleRawUpstreams = append(handleRawUpstreams, targets...)
+							if inlineTLS {
+								handleHasTLS = true
+							}
+						} else {
+							topRawUpstreams = append(topRawUpstreams, targets...)
+							if inlineTLS {
+								topHasTLS = true
+							}
 						}
 					}
 				} else if tokens[0] == "reverse_proxy" {
@@ -1396,6 +1426,18 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func setSafeAssetHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+}
+
+func writeFaviconResponse(w http.ResponseWriter, contentType string, data []byte) {
+	w.Header().Set("Content-Type", contentType)
+	setSafeAssetHeaders(w)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(data)
+}
+
 func (s *Server) handleUploadsFile(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/uploads/")
 	if rel == "" || strings.Contains(rel, "/") || strings.Contains(rel, "\\") || rel == "." || rel == ".." {
@@ -1408,8 +1450,7 @@ func (s *Server) handleUploadsFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	setSafeAssetHeaders(w)
 	http.ServeFile(w, r, fullPath)
 }
 
@@ -1454,60 +1495,49 @@ func extractHTMLIconHrefs(html string) []string {
 	return append(icons, appleIcons...)
 }
 
-func looksLikeImageBytes(data []byte, contentType, targetURL string) bool {
-	if len(data) == 0 {
-		return false
+func isNonImageHeaderContentType(rawCT string) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
+	return strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "text/plain") || strings.HasPrefix(ct, "application/json")
+}
+
+// detectImageContentType validates whether data is a supported image and returns its normalized MIME type.
+func detectImageContentType(data []byte, rawCT, targetURL string) (string, bool) {
+	if len(data) == 0 || isNonImageHeaderContentType(rawCT) {
+		return "", false
 	}
-	ct := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	if strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "text/plain") || strings.HasPrefix(ct, "application/json") {
-		return false
-	}
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
 	trimmed := bytes.TrimSpace(data)
 	lowerPrefix := strings.ToLower(string(trimmed[:min(len(trimmed), 256)]))
 	if strings.HasPrefix(lowerPrefix, "<!doctype html") || strings.HasPrefix(lowerPrefix, "<html") {
-		return false
+		return "", false
 	}
+	uLower := strings.ToLower(targetURL)
+	isSVG := strings.Contains(lowerPrefix, "<svg") || strings.HasSuffix(uLower, ".svg")
+	// ICO magic bytes: 00 00 01 00 or 00 00 02 00
+	isICO := len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0
+
 	if strings.HasPrefix(ct, "image/") {
-		return true
+		return ct, true
 	}
 	if strings.Contains(lowerPrefix, "<svg") {
-		return true
+		return "image/svg+xml", true
+	}
+	if isICO {
+		return "image/x-icon", true
 	}
 	sniff := strings.ToLower(http.DetectContentType(data))
 	if strings.HasPrefix(sniff, "image/") {
-		return true
+		return sniff, true
 	}
-	// ICO magic bytes: 00 00 01 00 or 00 00 02 00
-	if len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0 {
-		return true
-	}
-	uLower := strings.ToLower(targetURL)
 	for ext := range allowedImageExts {
 		if strings.HasSuffix(uLower, ext) && !strings.HasPrefix(sniff, "text/") {
-			return true
+			if isSVG {
+				return "image/svg+xml", true
+			}
+			return "image/x-icon", true
 		}
 	}
-	return false
-}
-
-func normalizeImageContentType(data []byte, rawCT, targetURL string) string {
-	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
-	if strings.HasPrefix(ct, "image/") {
-		return ct
-	}
-	trimmed := bytes.TrimSpace(data)
-	lowerPrefix := strings.ToLower(string(trimmed[:min(len(trimmed), 256)]))
-	if strings.Contains(lowerPrefix, "<svg") || strings.HasSuffix(strings.ToLower(targetURL), ".svg") {
-		return "image/svg+xml"
-	}
-	if len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0 {
-		return "image/x-icon"
-	}
-	sniff := http.DetectContentType(data)
-	if strings.HasPrefix(sniff, "image/") {
-		return sniff
-	}
-	return "image/x-icon"
+	return "", false
 }
 
 func (s *Server) fetchImageCandidate(targetURL string) ([]byte, string, bool) {
@@ -1525,19 +1555,23 @@ func (s *Server) fetchImageCandidate(targetURL string) ([]byte, string, bool) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", false
 	}
+	ct := resp.Header.Get("Content-Type")
+	if isNonImageHeaderContentType(ct) {
+		return nil, "", false
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB max
 	if err != nil || len(data) == 0 {
 		return nil, "", false
 	}
-	ct := resp.Header.Get("Content-Type")
 	finalURL := targetURL
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
-	if !looksLikeImageBytes(data, ct, finalURL) {
+	normCT, ok := detectImageContentType(data, ct, finalURL)
+	if !ok {
 		return nil, "", false
 	}
-	return data, normalizeImageContentType(data, ct, finalURL), true
+	return data, normCT, true
 }
 
 func (s *Server) discoverFaviconFromBase(baseURL string) ([]byte, string, bool) {
@@ -1546,9 +1580,17 @@ func (s *Server) discoverFaviconFromBase(baseURL string) ([]byte, string, bool) 
 		return nil, "", false
 	}
 	origin := parsedBase.Scheme + "://" + parsedBase.Host
+	tried := make(map[string]bool, 8)
+	tryCandidate := func(u string) ([]byte, string, bool) {
+		if u == "" || tried[u] {
+			return nil, "", false
+		}
+		tried[u] = true
+		return s.fetchImageCandidate(u)
+	}
 
 	// 1. Try /favicon.ico directly
-	if data, ct, ok := s.fetchImageCandidate(origin + "/favicon.ico"); ok {
+	if data, ct, ok := tryCandidate(origin + "/favicon.ico"); ok {
 		return data, ct, true
 	}
 
@@ -1558,19 +1600,25 @@ func (s *Server) discoverFaviconFromBase(baseURL string) ([]byte, string, bool) 
 		req.Header.Set("User-Agent", "CaddyHome/1.0")
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
 		if resp, err := s.faviconClient.Do(req); err == nil {
-			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-			resp.Body.Close()
-			pageBase := parsedBase
-			if resp.Request != nil && resp.Request.URL != nil {
-				pageBase = resp.Request.URL
+			ct := strings.ToLower(resp.Header.Get("Content-Type"))
+			var bodyBytes []byte
+			if resp.StatusCode < 500 && (ct == "" || strings.Contains(ct, "html") || strings.Contains(ct, "xml") || strings.HasPrefix(ct, "text/")) {
+				bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 			}
-			for _, href := range extractHTMLIconHrefs(string(bodyBytes)) {
-				refURL, err := pageBase.Parse(href)
-				if err != nil {
-					continue
+			resp.Body.Close()
+			if len(bodyBytes) > 0 {
+				pageBase := parsedBase
+				if resp.Request != nil && resp.Request.URL != nil {
+					pageBase = resp.Request.URL
 				}
-				if data, ct, ok := s.fetchImageCandidate(refURL.String()); ok {
-					return data, ct, true
+				for _, href := range extractHTMLIconHrefs(string(bodyBytes)) {
+					refURL, err := pageBase.Parse(href)
+					if err != nil {
+						continue
+					}
+					if data, ct, ok := tryCandidate(refURL.String()); ok {
+						return data, ct, true
+					}
 				}
 			}
 		}
@@ -1583,7 +1631,7 @@ func (s *Server) discoverFaviconFromBase(baseURL string) ([]byte, string, bool) 
 		"/favicon.png",
 		"/apple-touch-icon.png",
 	} {
-		if data, ct, ok := s.fetchImageCandidate(origin + path); ok {
+		if data, ct, ok := tryCandidate(origin + path); ok {
 			return data, ct, true
 		}
 	}
@@ -1602,6 +1650,19 @@ func (s *Server) isAllowedFaviconDomain(domain string) (*Service, bool) {
 	cp.Upstreams = slices.Clone(svc.Upstreams)
 	s.mu.RUnlock()
 	return &cp, true
+}
+
+func (s *Server) storeFaviconCache(key string, entry cachedFavicon, now time.Time) {
+	s.faviconMu.Lock()
+	if len(s.faviconCache) > 256 {
+		for k, v := range s.faviconCache {
+			if now.After(v.expiresAt) {
+				delete(s.faviconCache, k)
+			}
+		}
+	}
+	s.faviconCache[key] = entry
+	s.faviconMu.Unlock()
 }
 
 func (s *Server) handleServiceFavicon(w http.ResponseWriter, r *http.Request) {
@@ -1646,39 +1707,26 @@ func (s *Server) handleServiceFavicon(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", cached.contentType)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_, _ = w.Write(cached.data)
+		writeFaviconResponse(w, cached.contentType, cached.data)
 		return
 	}
 
 	for _, base := range candidates {
 		if data, ct, ok := s.discoverFaviconFromBase(base); ok {
-			s.faviconMu.Lock()
-			s.faviconCache[cacheKey] = cachedFavicon{
+			s.storeFaviconCache(cacheKey, cachedFavicon{
 				data:        data,
 				contentType: ct,
 				expiresAt:   now.Add(6 * time.Hour),
-			}
-			s.faviconMu.Unlock()
-
-			w.Header().Set("Content-Type", ct)
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-			w.Header().Set("Cache-Control", "public, max-age=3600")
-			_, _ = w.Write(data)
+			}, now)
+			writeFaviconResponse(w, ct, data)
 			return
 		}
 	}
 
-	s.faviconMu.Lock()
-	s.faviconCache[cacheKey] = cachedFavicon{
+	s.storeFaviconCache(cacheKey, cachedFavicon{
 		notFound:  true,
 		expiresAt: now.Add(2 * time.Minute),
-	}
-	s.faviconMu.Unlock()
+	}, now)
 	http.NotFound(w, r)
 }
 
