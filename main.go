@@ -90,11 +90,17 @@ type cachedFavicon struct {
 	expiresAt   time.Time
 }
 
+type faviconInflight struct {
+	done  chan struct{}
+	entry cachedFavicon
+}
+
 type Server struct {
 	mu              sync.RWMutex
 	reconcileMu     sync.Mutex
 	faviconMu       sync.RWMutex
 	faviconCache    map[string]cachedFavicon
+	faviconInflight map[string]*faviconInflight
 	faviconClient   *http.Client
 	configPath      string
 	uploadsDir      string
@@ -213,14 +219,19 @@ func ensureStateDefaults(st *AppState) {
 	for _, c := range st.Categories {
 		validCats[c.ID] = true
 	}
+	cleanedServices := make(map[string]*Service, len(st.Services))
 	for domain, svc := range st.Services {
 		if svc == nil {
-			delete(st.Services, domain)
 			continue
 		}
-		if svc.Domain == "" {
-			svc.Domain = domain
+		key := strings.TrimSpace(domain)
+		if key == "" {
+			key = strings.TrimSpace(svc.Domain)
 		}
+		if key == "" {
+			continue
+		}
+		svc.Domain = key
 		if svc.ExternalURL == "" {
 			svc.ExternalURL = "https://" + svc.Domain
 		}
@@ -233,7 +244,9 @@ func ensureStateDefaults(st *AppState) {
 		if svc.OverrideLanURL != nil && strings.TrimSpace(*svc.OverrideLanURL) == "" {
 			svc.OverrideLanURL = nil
 		}
+		cleanedServices[key] = svc
 	}
+	st.Services = cleanedServices
 }
 
 func (s *Server) applyOwnership(path string) {
@@ -251,11 +264,12 @@ func NewServer(configPath string) (*Server, error) {
 	favTransport := http.DefaultTransport.(*http.Transport).Clone()
 	favTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	srv := &Server{
-		configPath:   configPath,
-		uploadsDir:   uploadsDir,
-		envConfig:    loadEnvConfig(),
-		state:        defaultState(),
-		faviconCache: make(map[string]cachedFavicon),
+		configPath:      configPath,
+		uploadsDir:      uploadsDir,
+		envConfig:       loadEnvConfig(),
+		state:           defaultState(),
+		faviconCache:    make(map[string]cachedFavicon),
+		faviconInflight: make(map[string]*faviconInflight),
 		faviconClient: &http.Client{
 			Timeout:   4 * time.Second,
 			Transport: favTransport,
@@ -444,6 +458,22 @@ func addUniqueUpstream(slice []string, item string) []string {
 	return append(slice, item)
 }
 
+func upsertDiscoveredService(results map[string]*DiscoveredService, rawDomain string, upstreams []string) *DiscoveredService {
+	clean := cleanDomainToken(rawDomain)
+	if !isValidConcreteDomain(clean) {
+		return nil
+	}
+	entry, exists := results[clean]
+	if !exists {
+		entry = &DiscoveredService{Domain: clean}
+		results[clean] = entry
+	}
+	for _, u := range upstreams {
+		entry.Upstreams = addUniqueUpstream(entry.Upstreams, u)
+	}
+	return entry
+}
+
 // parseCaddyAPI queries the Caddy Admin API and extracts domain -> upstreams mappings.
 func (s *Server) parseCaddyAPI(apiURL, defaultLanIP string) (map[string]*DiscoveredService, error) {
 	endpoint := strings.TrimRight(strings.TrimSpace(apiURL), "/")
@@ -513,18 +543,7 @@ func (s *Server) parseCaddyAPI(apiURL, defaultLanIP string) (map[string]*Discove
 				}
 				if len(extracted) > 0 {
 					for _, host := range activeHosts {
-						clean := cleanDomainToken(host)
-						if !isValidConcreteDomain(clean) {
-							continue
-						}
-						entry, exists := results[clean]
-						if !exists {
-							entry = &DiscoveredService{Domain: clean}
-							results[clean] = entry
-						}
-						for _, u := range extracted {
-							entry.Upstreams = addUniqueUpstream(entry.Upstreams, u)
-						}
+						upsertDiscoveredService(results, host, extracted)
 					}
 				}
 			default:
@@ -611,15 +630,29 @@ func parseCaddyfile(filePath, defaultLanIP string) (map[string]*DiscoveredServic
 	return parseCaddyfileContent(string(rawBytes), defaultLanIP), nil
 }
 
-func countBracesOutsideQuotes(line string) (opens int, closes int) {
+func sanitizeLineAndCountBraces(line string) (cleanLine string, opens int, closes int) {
 	inQuotes := false
+	escaped := false
+	commentIdx := len(line)
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
-		if ch == '"' && (i == 0 || line[i-1] != '\\') {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inQuotes {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
 			inQuotes = !inQuotes
 			continue
 		}
 		if !inQuotes {
+			if ch == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+				commentIdx = i
+				break
+			}
 			switch ch {
 			case '{':
 				opens++
@@ -628,39 +661,24 @@ func countBracesOutsideQuotes(line string) (opens int, closes int) {
 			}
 		}
 	}
-	return opens, closes
+	return strings.TrimSpace(line[:commentIdx]), opens, closes
 }
 
-func stripInlineComment(line string) string {
-	inQuotes := false
-	for i := 0; i < len(line); i++ {
-		ch := line[i]
-		if ch == '"' && (i == 0 || line[i-1] != '\\') {
-			inQuotes = !inQuotes
-			continue
-		}
-		if !inQuotes && ch == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
-			return strings.TrimSpace(line[:i])
-		}
-	}
-	return strings.TrimSpace(line)
+var skipReverseProxyFlags = map[string]int{
+	"lb_policy":       1,
+	"lb_try_duration": 1,
+	"lb_try_interval": 1,
+	"health_uri":      1,
+	"health_port":     1,
+	"health_interval": 1,
+	"health_timeout":  1,
+	"health_status":   1,
+	"trusted_proxies": 1,
+	"flush_interval":  1,
 }
 
 func extractReverseProxyTargets(tokens []string) []string {
 	var targets []string
-	skipFlagsWithArg := map[string]bool{
-		"lb_policy":       true,
-		"lb_try_duration": true,
-		"lb_try_interval": true,
-		"health_uri":      true,
-		"health_port":     true,
-		"health_interval": true,
-		"health_timeout":  true,
-		"health_status":   true,
-		"header_up":       true,
-		"header_down":     true,
-		"trusted_proxies": true,
-	}
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
 		if tok == "{" || tok == "}" {
@@ -669,11 +687,22 @@ func extractReverseProxyTargets(tokens []string) []string {
 		if strings.HasPrefix(tok, "@") || strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "*") {
 			continue
 		}
-		if skipFlagsWithArg[tok] {
-			i++
+		if skipArgs, ok := skipReverseProxyFlags[tok]; ok {
+			i += skipArgs
 			continue
 		}
-		if strings.HasPrefix(tok, "-") || tok == "to" || tok == "flush_interval" {
+		if tok == "header_up" || tok == "header_down" {
+			// Syntax: header_up [+|-]Field [value]
+			if i+1 < len(tokens) {
+				field := tokens[i+1]
+				i++
+				if !strings.HasPrefix(field, "-") && i+1 < len(tokens) && tokens[i+1] != "{" && tokens[i+1] != "}" {
+					i++
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(tok, "-") || tok == "to" {
 			continue
 		}
 		// Likely an upstream dial address
@@ -684,6 +713,15 @@ func extractReverseProxyTargets(tokens []string) []string {
 		}
 	}
 	return targets
+}
+
+func parseInlineReverseProxy(segment string) (targets []string, hasTLS bool, ok bool) {
+	rpIdx := strings.Index(segment, "reverse_proxy")
+	if rpIdx == -1 {
+		return nil, false, false
+	}
+	rpPart := segment[rpIdx+len("reverse_proxy"):]
+	return extractReverseProxyTargets(strings.Fields(rpPart)), strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls"), true
 }
 
 func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredService {
@@ -750,17 +788,9 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 		}
 		derivedMatcherName := formatMatcherTitle(matcherTag)
 		for _, d := range domains {
-			clean := cleanDomainToken(d)
-			if !isValidConcreteDomain(clean) {
+			entry := upsertDiscoveredService(results, d, normList)
+			if entry == nil {
 				continue
-			}
-			entry, exists := results[clean]
-			if !exists {
-				entry = &DiscoveredService{Domain: clean}
-				results[clean] = entry
-			}
-			for _, u := range normList {
-				entry.Upstreams = addUniqueUpstream(entry.Upstreams, u)
 			}
 			if meta.name != "" {
 				entry.MagicName = meta.name
@@ -794,12 +824,11 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 			continue
 		}
 
-		line := stripInlineComment(trimmed)
+		line, opens, closes := sanitizeLineAndCountBraces(trimmed)
 		if line == "" {
 			continue
 		}
 
-		opens, closes := countBracesOutsideQuotes(line)
 		prevDepth := depth
 
 		// Depth 0: Starting a site block (or single-line site block)
@@ -832,10 +861,9 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 				rpDirectMatcher = ""
 
 				// Single-line directive inside `{ ... }`
-				if rpIdx := strings.Index(rest, "reverse_proxy"); rpIdx != -1 {
-					rpPart := rest[rpIdx+len("reverse_proxy"):]
-					topRawUpstreams = append(topRawUpstreams, extractReverseProxyTargets(strings.Fields(rpPart))...)
-					if strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls") {
+				if targets, inlineTLS, ok := parseInlineReverseProxy(rest); ok {
+					topRawUpstreams = append(topRawUpstreams, targets...)
+					if inlineTLS {
 						topHasTLS = true
 					}
 				}
@@ -902,19 +930,15 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 					pendingMagic = magicMeta{}
 
 					// Check if single-line `handle @matcher { reverse_proxy ... }`
-					if rpIdx := strings.Index(line, "reverse_proxy"); rpIdx != -1 {
-						rpPart := line[rpIdx+len("reverse_proxy"):]
-						handleRawUpstreams = append(handleRawUpstreams, extractReverseProxyTargets(strings.Fields(rpPart))...)
-						if strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls") {
+					if targets, inlineTLS, ok := parseInlineReverseProxy(line); ok {
+						handleRawUpstreams = append(handleRawUpstreams, targets...)
+						if inlineTLS {
 							handleHasTLS = true
 						}
 					}
-				} else if isHandlerDirective && strings.Contains(line, "reverse_proxy") {
+				} else if isHandlerDirective {
 					// Single-line `handle /path/* { reverse_proxy ... }` or `handle_path /api/* { reverse_proxy ... }`
-					if rpIdx := strings.Index(line, "reverse_proxy"); rpIdx != -1 {
-						rpPart := line[rpIdx+len("reverse_proxy"):]
-						targets := extractReverseProxyTargets(strings.Fields(rpPart))
-						inlineTLS := strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls")
+					if targets, inlineTLS, ok := parseInlineReverseProxy(line); ok {
 						if activeHandleMatcher != "" {
 							handleRawUpstreams = append(handleRawUpstreams, targets...)
 							if inlineTLS {
@@ -928,8 +952,7 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 						}
 					}
 				} else if tokens[0] == "reverse_proxy" {
-					targets := extractReverseProxyTargets(tokens[1:])
-					inlineTLS := strings.Contains(line, "transport") && strings.Contains(line, "tls")
+					targets, inlineTLS, _ := parseInlineReverseProxy(line)
 					if activeHandleMatcher != "" {
 						handleRawUpstreams = append(handleRawUpstreams, targets...)
 						if inlineTLS {
@@ -1330,16 +1353,23 @@ func (s *Server) handlePutState(w http.ResponseWriter, r *http.Request) {
 	}
 	ensureStateDefaults(&incoming)
 
-	s.mu.Lock()
-	newRefs := collectReferencedUploads(&incoming)
-	s.state = incoming
-	err = s.saveStateLocked()
-	s.mu.Unlock()
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
 
+	payload, err := json.MarshalIndent(incoming, "", "  ")
 	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed encoding state: " + err.Error()})
+		return
+	}
+	if err := s.saveStatePayloadLocked(payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed persisting state: " + err.Error()})
 		return
 	}
+
+	newRefs := collectReferencedUploads(&incoming)
+	s.mu.Lock()
+	s.state = incoming
+	s.mu.Unlock()
 
 	// Remove any uploaded files in uploadsDir that are not referenced by the saved state
 	if entries, readErr := os.ReadDir(s.uploadsDir); readErr == nil {
@@ -1350,19 +1380,17 @@ func (s *Server) handlePutState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	writeJSON(w, http.StatusOK, s.state)
+	writeJSON(w, http.StatusOK, incoming)
 }
 
-var allowedImageExts = map[string]bool{
-	".png":  true,
-	".jpg":  true,
-	".jpeg": true,
-	".webp": true,
-	".svg":  true,
-	".ico":  true,
-	".gif":  true,
+var allowedImageMimes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".svg":  "image/svg+xml",
+	".ico":  "image/x-icon",
+	".gif":  "image/gif",
 }
 
 func sanitizeFilename(name string) string {
@@ -1397,8 +1425,18 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if !allowedImageExts[ext] {
+	if _, ok := allowedImageMimes[ext]; !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported image format"})
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, (10<<20)+1))
+	if err != nil || len(data) == 0 || len(data) > 10<<20 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty or oversized image file"})
+		return
+	}
+	if _, ok := detectImageContentType(data, header.Header.Get("Content-Type"), header.Filename); !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file content is not a valid image"})
 		return
 	}
 
@@ -1407,15 +1445,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("%d-%s-%s%s", time.Now().Unix(), hex.EncodeToString(randBytes), sanitizeFilename(header.Filename), ext)
 	destPath := filepath.Join(s.uploadsDir, filename)
 
-	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed creating upload file"})
-		return
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, file); err != nil {
-		_ = os.Remove(destPath)
+	if err := os.WriteFile(destPath, data, 0o644); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed saving uploaded file"})
 		return
 	}
@@ -1495,24 +1525,27 @@ func extractHTMLIconHrefs(html string) []string {
 	return append(icons, appleIcons...)
 }
 
-func isNonImageHeaderContentType(rawCT string) bool {
-	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
+func parseMimeType(rawCT string) string {
+	mediaType, _, _ := strings.Cut(rawCT, ";")
+	return strings.ToLower(strings.TrimSpace(mediaType))
+}
+
+func isNonImageHeaderContentType(ct string) bool {
 	return strings.HasPrefix(ct, "text/html") || strings.HasPrefix(ct, "text/plain") || strings.HasPrefix(ct, "application/json")
 }
 
 // detectImageContentType validates whether data is a supported image and returns its normalized MIME type.
 func detectImageContentType(data []byte, rawCT, targetURL string) (string, bool) {
-	if len(data) == 0 || isNonImageHeaderContentType(rawCT) {
+	ct := parseMimeType(rawCT)
+	if len(data) == 0 || isNonImageHeaderContentType(ct) {
 		return "", false
 	}
-	ct := strings.ToLower(strings.TrimSpace(strings.Split(rawCT, ";")[0]))
 	trimmed := bytes.TrimSpace(data)
 	lowerPrefix := strings.ToLower(string(trimmed[:min(len(trimmed), 256)]))
 	if strings.HasPrefix(lowerPrefix, "<!doctype html") || strings.HasPrefix(lowerPrefix, "<html") {
 		return "", false
 	}
 	uLower := strings.ToLower(targetURL)
-	isSVG := strings.Contains(lowerPrefix, "<svg") || strings.HasSuffix(uLower, ".svg")
 	// ICO magic bytes: 00 00 01 00 or 00 00 02 00
 	isICO := len(data) >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0
 
@@ -1525,16 +1558,13 @@ func detectImageContentType(data []byte, rawCT, targetURL string) (string, bool)
 	if isICO {
 		return "image/x-icon", true
 	}
-	sniff := strings.ToLower(http.DetectContentType(data))
+	sniff := parseMimeType(http.DetectContentType(data))
 	if strings.HasPrefix(sniff, "image/") {
 		return sniff, true
 	}
-	for ext := range allowedImageExts {
+	for ext, mimeType := range allowedImageMimes {
 		if strings.HasSuffix(uLower, ext) && !strings.HasPrefix(sniff, "text/") {
-			if isSVG {
-				return "image/svg+xml", true
-			}
-			return "image/x-icon", true
+			return mimeType, true
 		}
 	}
 	return "", false
@@ -1556,7 +1586,7 @@ func (s *Server) fetchImageCandidate(targetURL string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	ct := resp.Header.Get("Content-Type")
-	if isNonImageHeaderContentType(ct) {
+	if isNonImageHeaderContentType(parseMimeType(ct)) {
 		return nil, "", false
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB max
@@ -1652,7 +1682,8 @@ func (s *Server) isAllowedFaviconDomain(domain string) (*Service, bool) {
 	return &cp, true
 }
 
-func (s *Server) storeFaviconCache(key string, entry cachedFavicon, now time.Time) {
+func (s *Server) finishFaviconInflight(key string, flight *faviconInflight, entry cachedFavicon, now time.Time) {
+	flight.entry = entry
 	s.faviconMu.Lock()
 	if len(s.faviconCache) > 256 {
 		for k, v := range s.faviconCache {
@@ -1662,6 +1693,8 @@ func (s *Server) storeFaviconCache(key string, entry cachedFavicon, now time.Tim
 		}
 	}
 	s.faviconCache[key] = entry
+	delete(s.faviconInflight, key)
+	close(flight.done)
 	s.faviconMu.Unlock()
 }
 
@@ -1711,9 +1744,33 @@ func (s *Server) handleServiceFavicon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.faviconMu.Lock()
+	if cached, found = s.faviconCache[cacheKey]; found && now.Before(cached.expiresAt) {
+		s.faviconMu.Unlock()
+		if cached.notFound {
+			http.NotFound(w, r)
+			return
+		}
+		writeFaviconResponse(w, cached.contentType, cached.data)
+		return
+	}
+	if flight, inflight := s.faviconInflight[cacheKey]; inflight {
+		s.faviconMu.Unlock()
+		<-flight.done
+		if flight.entry.notFound {
+			http.NotFound(w, r)
+			return
+		}
+		writeFaviconResponse(w, flight.entry.contentType, flight.entry.data)
+		return
+	}
+	flight := &faviconInflight{done: make(chan struct{})}
+	s.faviconInflight[cacheKey] = flight
+	s.faviconMu.Unlock()
+
 	for _, base := range candidates {
 		if data, ct, ok := s.discoverFaviconFromBase(base); ok {
-			s.storeFaviconCache(cacheKey, cachedFavicon{
+			s.finishFaviconInflight(cacheKey, flight, cachedFavicon{
 				data:        data,
 				contentType: ct,
 				expiresAt:   now.Add(6 * time.Hour),
@@ -1723,7 +1780,7 @@ func (s *Server) handleServiceFavicon(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.storeFaviconCache(cacheKey, cachedFavicon{
+	s.finishFaviconInflight(cacheKey, flight, cachedFavicon{
 		notFound:  true,
 		expiresAt: now.Add(2 * time.Minute),
 	}, now)

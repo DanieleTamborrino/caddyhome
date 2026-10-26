@@ -158,10 +158,6 @@
       border: 1px solid var(--border-hover);
     }
 
-    .theme-warn-text {
-      color: var(--warning);
-    }
-
     .theme-warn-badge {
       background-color: var(--warning-soft);
       color: var(--warning);
@@ -876,11 +872,19 @@
         },
 
         activeServiceCount() {
-          return Object.values(this.state.services || {}).filter(s => s && s.active && !s.hidden).length;
+          let count = 0;
+          for (const s of Object.values(this.state.services || {})) {
+            if (s && s.active && !s.hidden) count++;
+          }
+          return count;
         },
 
         hiddenServiceCount() {
-          return Object.values(this.state.services || {}).filter(s => s && s.hidden).length;
+          let count = 0;
+          for (const s of Object.values(this.state.services || {})) {
+            if (s && s.hidden) count++;
+          }
+          return count;
         },
 
         sortedCategories() {
@@ -896,13 +900,6 @@
           const upMatch = (svc.upstreams || []).some(u => u.toLowerCase().includes(q));
           const ovMatch = (svc.override_lan_url || "").toLowerCase().includes(q);
           return nameMatch || domMatch || upMatch || ovMatch;
-        },
-
-        servicesForCategory(catId) {
-          const q = this.searchQuery.trim().toLowerCase();
-          return Object.values(this.state.services || {})
-            .filter(svc => (svc?.category_id || "cat_uncat") === catId && this.matchesServiceFilter(svc, q))
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         },
 
         categoriesWithServices() {

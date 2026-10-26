@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -281,7 +283,7 @@ plex.example.com {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, _ := mw.CreateFormFile("file", "logo.png")
-	_, _ = fw.Write([]byte("fake-png-bytes"))
+	_, _ = fw.Write([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"))
 	_ = mw.Close()
 
 	upReq := httptest.NewRequest(http.MethodPost, "/api/upload", &buf)
@@ -510,8 +512,22 @@ csharp.example.com {
 	}
 
 	// Upload two files: discardedURL (never referenced in state) and uploadedURL (assigned to service)
-	discardedURL := uploadFile("discarded.png", "fake-png")
+	discardedURL := uploadFile("discarded.png", "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
 	uploadedURL := uploadFile("icon.svg", `<svg xmlns="http://www.w3.org/2000/svg"></svg>`)
+
+	// Verify HTML masquerading as .png is rejected by /api/upload
+	var badBuf bytes.Buffer
+	badMW := multipart.NewWriter(&badBuf)
+	badFW, _ := badMW.CreateFormFile("file", "evil.png")
+	_, _ = badFW.Write([]byte("<!DOCTYPE html><html><script>alert(1)</script></html>"))
+	_ = badMW.Close()
+	badReq := httptest.NewRequest(http.MethodPost, "/api/upload", &badBuf)
+	badReq.Header.Set("Content-Type", badMW.FormDataContentType())
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected HTML disguised as .png to be rejected (400), got %d", badRec.Code)
+	}
 
 	// Check security headers on served upload
 	getUpReq := httptest.NewRequest(http.MethodGet, uploadedURL, nil)
@@ -591,11 +607,6 @@ func TestFrontendJSLogic(t *testing.T) {
 const assert = require("assert");
 
 // Mock browser globals
-global.localStorage = {
-  store: {},
-  getItem(k) { return this.store[k] || null; },
-  setItem(k, v) { this.store[k] = v; }
-};
 let currentThemeAttr = "dark";
 let mockSections = [];
 let mockGrids = [];
@@ -778,6 +789,65 @@ func TestServiceFaviconProxyDiscovery(t *testing.T) {
 	handler.ServeHTTP(recUnknown, reqUnknown)
 	if recUnknown.Code != http.StatusNotFound {
 		t.Fatalf("expected unknown domain to return 404, got %d", recUnknown.Code)
+	}
+
+	// Verify concurrent cold-cache requests for the same domain coalesce into a single upstream fetch
+	var upstreamHits atomic.Int32
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/favicon.ico" {
+			upstreamHits.Add(1)
+			w.Header().Set("Content-Type", "image/x-icon")
+			_, _ = w.Write(fakeICO)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer slowServer.Close()
+
+	srv.mu.Lock()
+	srv.state.Services["coalesce.example.com"] = &Service{
+		Domain:      "coalesce.example.com",
+		CustomName:  "Coalesce",
+		ExternalURL: "https://coalesce.example.com",
+		Upstreams:   []string{slowServer.URL},
+		Active:      true,
+	}
+	srv.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := httptest.NewRequest(http.MethodGet, "/api/favicon?domain=coalesce.example.com", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Errorf("concurrent GET /api/favicon status = %d", w.Code)
+			}
+		}()
+	}
+	wg.Wait()
+	if hits := upstreamHits.Load(); hits != 1 {
+		t.Fatalf("expected singleflight to coalesce 8 concurrent requests into 1 upstream hit, got %d", hits)
+	}
+
+	// Verify detectImageContentType extension fallback returns accurate MIME per extension when sniff returns application/octet-stream
+	if ct, ok := detectImageContentType([]byte{0x00, 0xad, 0xbe, 0xef}, "application/octet-stream", "https://a.com/logo.webp"); !ok || ct != "image/webp" {
+		t.Fatalf("expected image/webp fallback for .webp, got %q (%v)", ct, ok)
+	}
+	if ct, ok := detectImageContentType([]byte{0x00, 0xad, 0xbe, 0xef}, "application/octet-stream", "https://a.com/logo.png"); !ok || ct != "image/png" {
+		t.Fatalf("expected image/png fallback for .png, got %q (%v)", ct, ok)
+	}
+
+	// Verify sanitizeLineAndCountBraces handles escaped backslashes before closing quote and header_up with 2 args
+	cleanLine, opens, closes := sanitizeLineAndCountBraces(`reverse_proxy header_up X-Real-IP "val\\" 192.168.1.55:8080 { # comment`)
+	if opens != 1 || closes != 0 || strings.Contains(cleanLine, "# comment") {
+		t.Fatalf("unexpected sanitizeLineAndCountBraces result: line=%q opens=%d closes=%d", cleanLine, opens, closes)
+	}
+	targets := extractReverseProxyTargets(strings.Fields(cleanLine)[1:])
+	if !slices.Equal(targets, []string{"192.168.1.55:8080"}) {
+		t.Fatalf("expected header_up 2-arg value to be skipped, got targets: %v", targets)
 	}
 }
 
