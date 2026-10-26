@@ -6,6 +6,8 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - PUID=1000
+      - PGID=1000
       - PORT=8080
       - CONFIG_PATH=/data/config.json
       - CADDY_MODE=api

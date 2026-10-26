@@ -48,6 +48,8 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - PUID=1000
+      - PGID=1000
       - PORT=8080
       - CONFIG_PATH=/data/config.json
       - CADDY_MODE=api
@@ -76,6 +78,8 @@ Open `http://localhost:8080` in your browser.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
+| `PUID` | `1000` | User ID (UID) under which the `caddyhome` process runs inside the container (via `su-exec`). |
+| `PGID` | `1000` | Group ID (GID) under which the `caddyhome` process runs inside the container (via `su-exec`). |
 | `PORT` | `8080` | HTTP listening port for the web interface and API. |
 | `CONFIG_PATH` | `/data/config.json` | Path to the persistent JSON state file. Uploaded images are stored alongside it in `/data/uploads/`. |
 | `CADDY_MODE` | `api` | Discovery source: `api` (Caddy Admin API, default) or `file` (mounted `Caddyfile`). |
