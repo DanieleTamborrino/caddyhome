@@ -280,25 +280,36 @@ plex.example.com {
 	}
 }
 
-func TestDefaultMode(t *testing.T) {
+func TestDefaultModeAndEnvOnlyConfig(t *testing.T) {
 	t.Setenv("CADDY_MODE", "")
 	def := defaultSettings()
 	if def.Title != "CaddyHome" {
 		t.Fatalf("expected default Title 'CaddyHome', got %q", def.Title)
 	}
-	if def.CaddyMode != "api" {
-		t.Fatalf("expected default CaddyMode 'api', got %q", def.CaddyMode)
+	envCfg := loadEnvConfig()
+	if envCfg.CaddyMode != "api" {
+		t.Fatalf("expected default CaddyMode 'api', got %q", envCfg.CaddyMode)
 	}
 
-	// Legacy "both" in persisted config should normalize to "api"
+	// Ensure persisted config.json never stores docker-compose environment settings
 	tmpCfg := filepath.Join(t.TempDir(), "config.json")
-	_ = os.WriteFile(tmpCfg, []byte(`{"settings":{"caddy_mode":"both"}}`), 0o644)
-
+	t.Setenv("CADDY_MODE", "both") // invalid/legacy mode should fall back to "api"
 	srv, err := NewServer(tmpCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.state.Settings.CaddyMode != "api" {
-		t.Fatalf("expected legacy 'both' to normalize to 'api', got %q", srv.state.Settings.CaddyMode)
+	if srv.envConfig.CaddyMode != "api" {
+		t.Fatalf("expected legacy 'both' to normalize to 'api', got %q", srv.envConfig.CaddyMode)
+	}
+
+	rawDisk, err := os.ReadFile(tmpCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diskStr := string(rawDisk)
+	for _, forbiddenKey := range []string{"caddy_mode", "caddy_file_path", "caddy_api_url", "default_lan_ip", "sync_interval_seconds"} {
+		if bytes.Contains(rawDisk, []byte(forbiddenKey)) {
+			t.Fatalf("config.json must not persist env setting %q, got:\n%s", forbiddenKey, diskStr)
+		}
 	}
 }

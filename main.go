@@ -29,11 +29,14 @@ type Settings struct {
 	Theme                    string  `json:"theme"`
 	BackgroundImage          string  `json:"background_image"`
 	BackgroundOverlayOpacity float64 `json:"background_overlay_opacity"`
-	CaddyMode                string  `json:"caddy_mode"`
-	CaddyFilePath            string  `json:"caddy_file_path"`
-	CaddyAPIURL              string  `json:"caddy_api_url"`
-	DefaultLanIP             string  `json:"default_lan_ip"`
-	SyncIntervalSeconds      int     `json:"sync_interval_seconds"`
+}
+
+type EnvConfig struct {
+	CaddyMode           string
+	CaddyFilePath       string
+	CaddyAPIURL         string
+	DefaultLanIP        string
+	SyncIntervalSeconds int
 }
 
 type Category struct {
@@ -75,6 +78,7 @@ type Server struct {
 	reconcileMu     sync.Mutex
 	configPath      string
 	uploadsDir      string
+	envConfig       EnvConfig
 	state           AppState
 	lastFileModTime time.Time
 	lastFileSize    int64
@@ -88,7 +92,7 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-func defaultSettings() Settings {
+func loadEnvConfig() EnvConfig {
 	syncSec := 60
 	if raw := strings.TrimSpace(os.Getenv("SYNC_INTERVAL_SECONDS")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 5 {
@@ -99,16 +103,21 @@ func defaultSettings() Settings {
 	if mode != "file" && mode != "api" {
 		mode = "api"
 	}
+	return EnvConfig{
+		CaddyMode:           mode,
+		CaddyFilePath:       envOrDefault("CADDYFILE_PATH", "/etc/caddy/Caddyfile"),
+		CaddyAPIURL:         envOrDefault("CADDY_API_URL", "http://localhost:2019/config/"),
+		DefaultLanIP:        envOrDefault("DEFAULT_LAN_IP", "127.0.0.1"),
+		SyncIntervalSeconds: syncSec,
+	}
+}
+
+func defaultSettings() Settings {
 	return Settings{
 		Title:                    "CaddyHome",
 		Theme:                    "dark",
 		BackgroundImage:          "",
 		BackgroundOverlayOpacity: 0.75,
-		CaddyMode:                mode,
-		CaddyFilePath:            envOrDefault("CADDYFILE_PATH", "/etc/caddy/Caddyfile"),
-		CaddyAPIURL:              envOrDefault("CADDY_API_URL", "http://localhost:2019/config/"),
-		DefaultLanIP:             envOrDefault("DEFAULT_LAN_IP", "127.0.0.1"),
-		SyncIntervalSeconds:      syncSec,
 	}
 }
 
@@ -133,24 +142,6 @@ func ensureStateDefaults(st *AppState) {
 	}
 	if st.Settings.BackgroundOverlayOpacity <= 0 || st.Settings.BackgroundOverlayOpacity > 1 {
 		st.Settings.BackgroundOverlayOpacity = 0.75
-	}
-	mode := strings.ToLower(strings.TrimSpace(st.Settings.CaddyMode))
-	if mode != "file" && mode != "api" {
-		st.Settings.CaddyMode = defaults.CaddyMode
-	} else {
-		st.Settings.CaddyMode = mode
-	}
-	if strings.TrimSpace(st.Settings.CaddyFilePath) == "" {
-		st.Settings.CaddyFilePath = defaults.CaddyFilePath
-	}
-	if strings.TrimSpace(st.Settings.CaddyAPIURL) == "" {
-		st.Settings.CaddyAPIURL = defaults.CaddyAPIURL
-	}
-	if strings.TrimSpace(st.Settings.DefaultLanIP) == "" {
-		st.Settings.DefaultLanIP = defaults.DefaultLanIP
-	}
-	if st.Settings.SyncIntervalSeconds < 5 {
-		st.Settings.SyncIntervalSeconds = defaults.SyncIntervalSeconds
 	}
 	if st.Services == nil {
 		st.Services = make(map[string]*Service)
@@ -205,6 +196,7 @@ func NewServer(configPath string) (*Server, error) {
 	srv := &Server{
 		configPath: configPath,
 		uploadsDir: uploadsDir,
+		envConfig:  loadEnvConfig(),
 		state:      defaultState(),
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}
@@ -881,18 +873,12 @@ func (s *Server) reconcileState(force bool) {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 
-	s.mu.RLock()
-	settings := s.state.Settings
-	s.mu.RUnlock()
-
-	mode := strings.ToLower(settings.CaddyMode)
-	if mode != "file" {
-		mode = "api"
-	}
+	cfg := s.envConfig
+	mode := cfg.CaddyMode
 
 	// Optimization: when watching Caddyfile in background (!force), check file mtime/size first
 	if mode == "file" && !force {
-		info, err := os.Stat(settings.CaddyFilePath)
+		info, err := os.Stat(cfg.CaddyFilePath)
 		if err != nil {
 			return
 		}
@@ -905,8 +891,8 @@ func (s *Server) reconcileState(force bool) {
 	sourcesSucceeded := 0
 
 	if mode == "file" {
-		if info, err := os.Stat(settings.CaddyFilePath); err == nil {
-			if fileDiscovered, err := parseCaddyfile(settings.CaddyFilePath, settings.DefaultLanIP); err == nil {
+		if info, err := os.Stat(cfg.CaddyFilePath); err == nil {
+			if fileDiscovered, err := parseCaddyfile(cfg.CaddyFilePath, cfg.DefaultLanIP); err == nil {
 				sourcesSucceeded++
 				s.lastFileModTime = info.ModTime()
 				s.lastFileSize = info.Size()
@@ -915,10 +901,10 @@ func (s *Server) reconcileState(force bool) {
 				log.Printf("WARN: Caddyfile parse failed: %v", err)
 			}
 		} else if force {
-			log.Printf("WARN: Caddyfile stat failed (%s): %v", settings.CaddyFilePath, err)
+			log.Printf("WARN: Caddyfile stat failed (%s): %v", cfg.CaddyFilePath, err)
 		}
 	} else {
-		if apiDiscovered, err := s.parseCaddyAPI(settings.CaddyAPIURL, settings.DefaultLanIP); err == nil {
+		if apiDiscovered, err := s.parseCaddyAPI(cfg.CaddyAPIURL, cfg.DefaultLanIP); err == nil {
 			sourcesSucceeded++
 			discovered = apiDiscovered
 		} else if force {
@@ -1166,19 +1152,18 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startBackgroundSync() {
+	if s.envConfig.CaddyMode != "file" {
+		return
+	}
+	intervalSec := s.envConfig.SyncIntervalSeconds
+	if intervalSec < 5 {
+		intervalSec = 60
+	}
 	go func() {
-		for {
-			s.mu.RLock()
-			mode := strings.ToLower(s.state.Settings.CaddyMode)
-			intervalSec := s.state.Settings.SyncIntervalSeconds
-			s.mu.RUnlock()
-			if intervalSec < 5 {
-				intervalSec = 60
-			}
-			time.Sleep(time.Duration(intervalSec) * time.Second)
-			if mode == "file" {
-				s.reconcileState(false)
-			}
+		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.reconcileState(false)
 		}
 	}()
 }
