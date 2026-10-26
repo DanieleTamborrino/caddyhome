@@ -19,10 +19,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 //go:embed index.html
 var embeddedIndexHTML []byte
+
+//go:embed logo.svg
+var embeddedLogoSVG []byte
 
 type Settings struct {
 	Title                    string  `json:"title"`
@@ -178,6 +183,10 @@ func ensureStateDefaults(st *AppState) {
 			Order: 99,
 		})
 	}
+	validCats := make(map[string]bool, len(st.Categories))
+	for _, c := range st.Categories {
+		validCats[c.ID] = true
+	}
 	for domain, svc := range st.Services {
 		if svc == nil {
 			delete(st.Services, domain)
@@ -192,7 +201,7 @@ func ensureStateDefaults(st *AppState) {
 		if svc.Upstreams == nil {
 			svc.Upstreams = []string{}
 		}
-		if svc.CategoryID == "" {
+		if svc.CategoryID == "" || !validCats[svc.CategoryID] {
 			svc.CategoryID = "cat_uncat"
 		}
 		if svc.OverrideLanURL != nil && strings.TrimSpace(*svc.OverrideLanURL) == "" {
@@ -297,7 +306,7 @@ func (s *Server) saveStateLocked() error {
 // normalizeUpstream normalizes a Caddy upstream target according to Section 5.2.
 func normalizeUpstream(raw, defaultLanIP string, hasTLS bool) string {
 	target := strings.TrimSpace(raw)
-	if target == "" || strings.HasPrefix(target, "unix/") {
+	if target == "" || strings.HasPrefix(target, "unix/") || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "*") {
 		return ""
 	}
 	forcedHTTPS := false
@@ -329,6 +338,9 @@ func normalizeUpstream(raw, defaultLanIP string, hasTLS bool) string {
 
 	host = strings.TrimSpace(host)
 	port = strings.TrimSpace(port)
+	if host == "" && port == "" {
+		return ""
+	}
 	if host == "" {
 		host = defaultLanIP
 	} else if !strings.Contains(host, ".") && !strings.HasPrefix(host, "[") && !strings.EqualFold(host, "localhost") {
@@ -616,7 +628,7 @@ func extractReverseProxyTargets(tokens []string) []string {
 		if tok == "{" || tok == "}" {
 			break
 		}
-		if strings.HasPrefix(tok, "@") {
+		if strings.HasPrefix(tok, "@") || strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "*") {
 			continue
 		}
 		if skipFlagsWithArg[tok] {
@@ -653,6 +665,10 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 	matcherDomains := make(map[string][]string)
 	matcherMagic := make(map[string]magicMeta)
 
+	// Active multi-line @matcher { host ... } definition
+	activeMatcherDef := ""
+	matcherDefStartDepth := 0
+
 	// Active handle @matcher state inside a block (depth >= 2)
 	activeHandleMatcher := ""
 	handleStartDepth := 0
@@ -660,7 +676,28 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 	var handleHasTLS bool
 	var handleInlineMagic magicMeta
 
-	recordDomains := func(domains []string, rawUpstreams []string, hasTLS bool, meta magicMeta) {
+	// Active multi-line reverse_proxy block state
+	inReverseProxyBlock := false
+	rpStartDepth := 0
+	rpDirectMatcher := ""
+	var rpDirectRawUpstreams []string
+	var rpDirectHasTLS bool
+	var rpDirectMagic magicMeta
+
+	mergeMagic := func(base, override magicMeta) magicMeta {
+		if override.name != "" {
+			base.name = override.name
+		}
+		if override.category != "" {
+			base.category = override.category
+		}
+		if override.icon != "" {
+			base.icon = override.icon
+		}
+		return base
+	}
+
+	recordDomains := func(domains []string, rawUpstreams []string, hasTLS bool, meta magicMeta, matcherTag string) {
 		if len(domains) == 0 || len(rawUpstreams) == 0 {
 			return
 		}
@@ -673,6 +710,7 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 		if len(normList) == 0 {
 			return
 		}
+		derivedMatcherName := formatMatcherTitle(matcherTag)
 		for _, d := range domains {
 			clean := cleanDomainToken(d)
 			if !isValidConcreteDomain(clean) {
@@ -686,8 +724,10 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 			for _, u := range normList {
 				entry.Upstreams = addUniqueUpstream(entry.Upstreams, u)
 			}
-			if meta.name != "" && entry.MagicName == "" {
+			if meta.name != "" {
 				entry.MagicName = meta.name
+			} else if derivedMatcherName != "" && entry.MagicName == "" {
+				entry.MagicName = derivedMatcherName
 			}
 			if meta.category != "" && entry.MagicCategory == "" {
 				entry.MagicCategory = meta.category
@@ -748,7 +788,10 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 				topHasTLS = false
 				matcherDomains = make(map[string][]string)
 				matcherMagic = make(map[string]magicMeta)
+				activeMatcherDef = ""
 				activeHandleMatcher = ""
+				inReverseProxyBlock = false
+				rpDirectMatcher = ""
 
 				// Single-line directive inside `{ ... }`
 				if closeIdx := strings.LastIndexByte(rest, '}'); closeIdx != -1 {
@@ -771,24 +814,53 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 		} else if prevDepth >= 1 && len(topDomains) > 0 {
 			tokens := strings.Fields(line)
 			if len(tokens) > 0 {
-				// 1. Named host matcher: `@sonarr host sonarr.domain.tld`
-				if strings.HasPrefix(tokens[0], "@") && len(tokens) >= 3 && tokens[1] == "host" {
+				// 1. Named host matcher: `@sonarr host sonarr.domain.tld` or `@sonarr { host sonarr.domain.tld }`
+				if strings.HasPrefix(tokens[0], "@") && len(tokens) >= 2 {
 					mName := tokens[0]
-					var hosts []string
-					for _, h := range tokens[2:] {
-						if h != "{" && h != "}" {
-							hosts = append(hosts, strings.TrimSuffix(h, ","))
+					if tokens[1] == "host" && len(tokens) >= 3 {
+						var hosts []string
+						for _, h := range tokens[2:] {
+							if h != "{" && h != "}" {
+								hosts = append(hosts, strings.TrimSuffix(h, ","))
+							}
+						}
+						matcherDomains[mName] = hosts
+						if pendingMagic.name != "" || pendingMagic.category != "" || pendingMagic.icon != "" {
+							matcherMagic[mName] = pendingMagic
+							pendingMagic = magicMeta{}
+						}
+					} else if tokens[1] == "{" {
+						if pendingMagic.name != "" || pendingMagic.category != "" || pendingMagic.icon != "" {
+							matcherMagic[mName] = pendingMagic
+							pendingMagic = magicMeta{}
+						}
+						// Check if `host ...` is on the same line inside `{ ... }`
+						for idx := 2; idx < len(tokens); idx++ {
+							if tokens[idx] == "host" {
+								for _, h := range tokens[idx+1:] {
+									if h == "}" || h == "{" {
+										break
+									}
+									matcherDomains[mName] = append(matcherDomains[mName], strings.TrimSuffix(h, ","))
+								}
+								break
+							}
+						}
+						if opens > closes {
+							activeMatcherDef = mName
+							matcherDefStartDepth = prevDepth
 						}
 					}
-					matcherDomains[mName] = hosts
-					if pendingMagic.name != "" || pendingMagic.category != "" || pendingMagic.icon != "" {
-						matcherMagic[mName] = pendingMagic
-						pendingMagic = magicMeta{}
+				} else if activeMatcherDef != "" && tokens[0] == "host" && len(tokens) >= 2 {
+					for _, h := range tokens[1:] {
+						if h != "{" && h != "}" {
+							matcherDomains[activeMatcherDef] = append(matcherDomains[activeMatcherDef], strings.TrimSuffix(h, ","))
+						}
 					}
 				}
 
-				// 2. Entering `handle @matcher {` or `route @matcher {`
-				if (tokens[0] == "handle" || tokens[0] == "route") && len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") && opens > 0 {
+				// 2. Entering `handle @matcher {` or `route @matcher {` for a known host matcher
+				if activeHandleMatcher == "" && (tokens[0] == "handle" || tokens[0] == "route") && len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") && len(matcherDomains[tokens[1]]) > 0 && opens > 0 {
 					activeHandleMatcher = tokens[1]
 					handleStartDepth = prevDepth
 					handleRawUpstreams = nil
@@ -798,28 +870,78 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 
 					// Check if single-line `handle @matcher { reverse_proxy ... }`
 					if rpIdx := strings.Index(line, "reverse_proxy"); rpIdx != -1 {
-						rpTokens := strings.Fields(line[rpIdx+len("reverse_proxy"):])
+						rpPart := line[rpIdx+len("reverse_proxy"):]
+						rpTokens := strings.Fields(rpPart)
 						handleRawUpstreams = append(handleRawUpstreams, extractReverseProxyTargets(rpTokens)...)
+						if strings.Contains(rpPart, "transport") && strings.Contains(rpPart, "tls") {
+							handleHasTLS = true
+						}
 					}
 				} else if tokens[0] == "reverse_proxy" {
 					targets := extractReverseProxyTargets(tokens[1:])
+					inlineTLS := strings.Contains(line, "transport") && strings.Contains(line, "tls")
 					if activeHandleMatcher != "" {
 						handleRawUpstreams = append(handleRawUpstreams, targets...)
-					} else if len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") {
-						// `reverse_proxy @matcher 192.168.1.30:8989`
+						if inlineTLS {
+							handleHasTLS = true
+						}
+						if pendingMagic.name != "" || pendingMagic.category != "" || pendingMagic.icon != "" {
+							handleInlineMagic = mergeMagic(handleInlineMagic, pendingMagic)
+							pendingMagic = magicMeta{}
+						}
+						if opens > closes {
+							inReverseProxyBlock = true
+							rpStartDepth = prevDepth
+							rpDirectMatcher = ""
+						}
+					} else if len(tokens) >= 2 && strings.HasPrefix(tokens[1], "@") && len(matcherDomains[tokens[1]]) > 0 {
+						// `reverse_proxy @matcher 192.168.1.30:8989` (single-line or multi-line block for a host matcher)
 						mName := tokens[1]
-						meta := matcherMagic[mName]
-						recordDomains(matcherDomains[mName], targets, strings.Contains(line, "tls"), meta)
+						baseMeta := magicMeta{category: topMagic.category, icon: topMagic.icon}
+						meta := mergeMagic(mergeMagic(baseMeta, matcherMagic[mName]), pendingMagic)
+						pendingMagic = magicMeta{}
+						if opens > closes {
+							inReverseProxyBlock = true
+							rpStartDepth = prevDepth
+							rpDirectMatcher = mName
+							rpDirectRawUpstreams = targets
+							rpDirectHasTLS = inlineTLS
+							rpDirectMagic = meta
+						} else {
+							recordDomains(matcherDomains[mName], targets, inlineTLS, meta, mName)
+						}
 					} else {
 						topRawUpstreams = append(topRawUpstreams, targets...)
+						if inlineTLS {
+							topHasTLS = true
+						}
+						if pendingMagic.name != "" || pendingMagic.category != "" || pendingMagic.icon != "" {
+							topMagic = mergeMagic(topMagic, pendingMagic)
+							pendingMagic = magicMeta{}
+						}
+						if opens > closes {
+							inReverseProxyBlock = true
+							rpStartDepth = prevDepth
+							rpDirectMatcher = ""
+						}
 					}
-				}
-
-				// 3. Detect `tls` or `tls_*` inside `transport http { tls ... }`
-				if strings.HasPrefix(tokens[0], "tls") || (tokens[0] == "transport" && strings.Contains(line, "tls")) {
-					if prevDepth >= 2 || strings.Contains(line, "transport") {
+				} else if inReverseProxyBlock {
+					// Inside `reverse_proxy ... { ... }` block
+					if tokens[0] == "to" && len(tokens) >= 2 {
+						targets := extractReverseProxyTargets(tokens[1:])
+						if activeHandleMatcher != "" {
+							handleRawUpstreams = append(handleRawUpstreams, targets...)
+						} else if rpDirectMatcher != "" {
+							rpDirectRawUpstreams = append(rpDirectRawUpstreams, targets...)
+						} else {
+							topRawUpstreams = append(topRawUpstreams, targets...)
+						}
+					}
+					if strings.HasPrefix(tokens[0], "tls") || (tokens[0] == "transport" && strings.Contains(line, "tls")) {
 						if activeHandleMatcher != "" {
 							handleHasTLS = true
+						} else if rpDirectMatcher != "" {
+							rpDirectHasTLS = true
 						} else {
 							topHasTLS = true
 						}
@@ -833,28 +955,38 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 			depth = 0
 		}
 
+		// Exiting multi-line `@matcher { ... }` definition block
+		if activeMatcherDef != "" && depth <= matcherDefStartDepth {
+			activeMatcherDef = ""
+		}
+
+		// Exiting multi-line `reverse_proxy { ... }` block
+		if inReverseProxyBlock && depth <= rpStartDepth {
+			if rpDirectMatcher != "" {
+				recordDomains(matcherDomains[rpDirectMatcher], rpDirectRawUpstreams, rpDirectHasTLS, rpDirectMagic, rpDirectMatcher)
+			}
+			inReverseProxyBlock = false
+			rpDirectMatcher = ""
+			rpDirectRawUpstreams = nil
+			rpDirectHasTLS = false
+			rpDirectMagic = magicMeta{}
+		}
+
 		// Exiting active `handle @matcher` block
 		if activeHandleMatcher != "" && depth <= handleStartDepth {
 			mDomains := matcherDomains[activeHandleMatcher]
-			meta := matcherMagic[activeHandleMatcher]
-			if meta.name == "" {
-				meta.name = handleInlineMagic.name
-			}
-			if meta.category == "" {
-				meta.category = handleInlineMagic.category
-			}
-			if meta.icon == "" {
-				meta.icon = handleInlineMagic.icon
-			}
-			recordDomains(mDomains, handleRawUpstreams, handleHasTLS, meta)
+			baseMeta := magicMeta{category: topMagic.category, icon: topMagic.icon}
+			meta := mergeMagic(mergeMagic(baseMeta, matcherMagic[activeHandleMatcher]), handleInlineMagic)
+			recordDomains(mDomains, handleRawUpstreams, handleHasTLS, meta, activeHandleMatcher)
 			activeHandleMatcher = ""
 			handleRawUpstreams = nil
 			handleHasTLS = false
+			handleInlineMagic = magicMeta{}
 		}
 
 		// Exiting top-level site block (multi-line or single-line)
 		if (prevDepth > 0 || opens > 0) && depth == 0 && len(topDomains) > 0 {
-			recordDomains(topDomains, topRawUpstreams, topHasTLS, topMagic)
+			recordDomains(topDomains, topRawUpstreams, topHasTLS, topMagic, "")
 			topDomains = nil
 			topRawUpstreams = nil
 			topHasTLS = false
@@ -865,20 +997,35 @@ func parseCaddyfileContent(content, defaultLanIP string) map[string]*DiscoveredS
 	return results
 }
 
-func formatSubdomainTitle(domain string) string {
-	sub := strings.ToLower(strings.Split(domain, ".")[0])
-	parts := strings.FieldsFunc(sub, func(r rune) bool {
-		return r == '-' || r == '_'
+func formatWordsTitle(raw string) string {
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(raw)), func(r rune) bool {
+		return r == '-' || r == '_' || r == '.'
 	})
 	if len(parts) == 0 {
-		return domain
+		return ""
 	}
 	for i, p := range parts {
-		if len(p) > 0 {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		if r, size := utf8.DecodeRuneInString(p); r != utf8.RuneError && size > 0 {
+			parts[i] = string(unicode.ToUpper(r)) + p[size:]
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func formatMatcherTitle(matcher string) string {
+	tag := strings.TrimPrefix(strings.TrimSpace(matcher), "@")
+	if tag == "" {
+		return ""
+	}
+	return formatWordsTitle(tag)
+}
+
+func formatSubdomainTitle(domain string) string {
+	sub := strings.Split(domain, ".")[0]
+	if title := formatWordsTitle(sub); title != "" {
+		return title
+	}
+	return domain
 }
 
 func slugifyCategoryID(name string) string {
@@ -899,7 +1046,8 @@ func slugifyCategoryID(name string) string {
 }
 
 // reconcileState runs discovery and updates in-memory state, writing to disk ONLY if state changed.
-func (s *Server) reconcileState(force bool) {
+// Returns true if at least one discovery source succeeded.
+func (s *Server) reconcileState(force bool) bool {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 
@@ -910,10 +1058,10 @@ func (s *Server) reconcileState(force bool) {
 	if mode == "file" && !force {
 		info, err := os.Stat(cfg.CaddyFilePath)
 		if err != nil {
-			return
+			return false
 		}
 		if info.ModTime().Equal(s.lastFileModTime) && info.Size() == s.lastFileSize {
-			return
+			return true
 		}
 	}
 
@@ -944,7 +1092,7 @@ func (s *Server) reconcileState(force bool) {
 
 	// Do not wipe active status if discovery source failed (e.g. Caddy restarting)
 	if sourcesSucceeded == 0 {
-		return
+		return false
 	}
 
 	nowUTC := time.Now().UTC().Format(time.RFC3339)
@@ -964,11 +1112,20 @@ func (s *Server) reconcileState(force bool) {
 				return c.ID
 			}
 		}
-		newID := slugifyCategoryID(catName)
-		for _, c := range s.state.Categories {
-			if c.ID == newID {
-				return c.ID
+		baseID := slugifyCategoryID(catName)
+		newID := baseID
+		for suffix := 2; ; suffix++ {
+			collision := false
+			for _, c := range s.state.Categories {
+				if c.ID == newID {
+					collision = true
+					break
+				}
 			}
+			if !collision {
+				break
+			}
+			newID = fmt.Sprintf("%s_%d", baseID, suffix)
 		}
 		maxOrder := 0
 		for _, c := range s.state.Categories {
@@ -1051,6 +1208,7 @@ func (s *Server) reconcileState(force bool) {
 			log.Printf("ERROR: failed saving state to %s: %v", s.configPath, err)
 		}
 	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -1070,6 +1228,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(embeddedIndexHTML)
 }
 
+func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(embeddedLogoSVG)
+}
+
 func (s *Server) handleGetState(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1081,6 +1245,26 @@ func (s *Server) handlePostSync(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, s.state)
+}
+
+func collectReferencedUploads(st *AppState) map[string]bool {
+	refs := make(map[string]bool)
+	addRef := func(u string) {
+		u = strings.TrimSpace(u)
+		if strings.HasPrefix(u, "/uploads/") {
+			name := filepath.Base(strings.TrimPrefix(u, "/uploads/"))
+			if name != "" && name != "." && name != "/" {
+				refs[name] = true
+			}
+		}
+	}
+	addRef(st.Settings.BackgroundImage)
+	for _, svc := range st.Services {
+		if svc != nil {
+			addRef(svc.Icon)
+		}
+	}
+	return refs
 }
 
 func (s *Server) handlePutState(w http.ResponseWriter, r *http.Request) {
@@ -1097,6 +1281,7 @@ func (s *Server) handlePutState(w http.ResponseWriter, r *http.Request) {
 	ensureStateDefaults(&incoming)
 
 	s.mu.Lock()
+	newRefs := collectReferencedUploads(&incoming)
 	s.state = incoming
 	err = s.saveStateLocked()
 	s.mu.Unlock()
@@ -1104,6 +1289,15 @@ func (s *Server) handlePutState(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed persisting state: " + err.Error()})
 		return
+	}
+
+	// Remove any uploaded files in uploadsDir that are not referenced by the saved state
+	if entries, readErr := os.ReadDir(s.uploadsDir); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && !newRefs[entry.Name()] {
+				_ = os.Remove(filepath.Join(s.uploadsDir, entry.Name()))
+			}
+		}
 	}
 
 	s.mu.RLock()
@@ -1182,15 +1376,39 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) startBackgroundSync() {
-	if s.envConfig.CaddyMode != "file" {
+func (s *Server) handleUploadsFile(w http.ResponseWriter, r *http.Request) {
+	rel := strings.TrimPrefix(r.URL.Path, "/uploads/")
+	if rel == "" || strings.Contains(rel, "/") || strings.Contains(rel, "\\") || rel == "." || rel == ".." {
+		http.NotFound(w, r)
 		return
 	}
+	fullPath := filepath.Join(s.uploadsDir, filepath.Clean(rel))
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) startBackgroundSync(initialSuccess bool) {
 	intervalSec := s.envConfig.SyncIntervalSeconds
 	if intervalSec < 5 {
 		intervalSec = 60
 	}
 	go func() {
+		// If initial sync failed (e.g. Caddy Admin API not ready yet on container startup),
+		// retry with short backoff before falling into the regular ticker loop.
+		if !initialSuccess {
+			for _, waitSec := range []int{2, 4, 8, 15} {
+				time.Sleep(time.Duration(waitSec) * time.Second)
+				if s.reconcileState(false) {
+					break
+				}
+			}
+		}
 		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -1202,7 +1420,9 @@ func (s *Server) startBackgroundSync() {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
-	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.uploadsDir))))
+	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
+	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
+	mux.HandleFunc("GET /uploads/", s.handleUploadsFile)
 	mux.HandleFunc("GET /api/state", s.handleGetState)
 	mux.HandleFunc("POST /api/sync", s.handlePostSync)
 	mux.HandleFunc("PUT /api/state", s.handlePutState)
@@ -1220,12 +1440,20 @@ func main() {
 	}
 
 	// Initial reconciliation on startup
-	srv.reconcileState(true)
-	srv.startBackgroundSync()
+	initialOK := srv.reconcileState(true)
+	srv.startBackgroundSync(initialOK)
 
 	addr := ":" + port
+	httpSrv := &http.Server{
+		Addr:              addr,
+		Handler:           srv.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	log.Printf("CaddyHome listening on %s (config: %s)", addr, configPath)
-	if err := http.ListenAndServe(addr, srv.routes()); err != nil {
+	if err := httpSrv.ListenAndServe(); err != nil {
 		log.Fatalf("HTTP server error: %v", err)
 	}
 }

@@ -1,6 +1,6 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /src
-COPY go.mod main.go index.html ./
+COPY go.mod main.go index.html logo.svg ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /caddyhome .
 
 FROM alpine:3.20

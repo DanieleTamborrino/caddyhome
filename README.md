@@ -1,4 +1,4 @@
-# CaddyHome
+# <img src="./logo.svg" width="36" height="36" align="top" alt="CaddyHome Logo" /> CaddyHome
 
 [![Build and Publish Docker Image](https://github.com/DanieleTamborrino/caddyhome/actions/workflows/docker-build.yml/badge.svg)](https://github.com/DanieleTamborrino/caddyhome/actions/workflows/docker-build.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
@@ -86,13 +86,13 @@ Open `http://localhost:8080` in your browser.
 | `CADDY_API_URL` | `http://localhost:2019/config/` | Base URL of the Caddy Admin API (used when `CADDY_MODE=api`). |
 | `CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Path to the mounted `Caddyfile` (used only when `CADDY_MODE=file`). |
 | `DEFAULT_LAN_IP` | `127.0.0.1` | Host IP substituted when an upstream target is a Docker container hostname without dots (e.g. `jellyfin:8096` -> `http://192.168.1.10:8096`). |
-| `SYNC_INTERVAL_SECONDS` | `60` | Background file-check interval in seconds (minimum `5`, **used only when `CADDY_MODE=file`**). |
+| `SYNC_INTERVAL_SECONDS` | `60` | Background discovery sync interval in seconds (minimum `5`). |
 
 ---
 
 ## 🔍 Caddyfile Discovery & Magic Comments
 
-CaddyHome supports both standard domain blocks and wildcard blocks with named host matchers. You can optionally annotate blocks with `# @name`, `# @category`, and `# @icon` comments for initial discovery:
+CaddyHome supports both standard domain blocks and wildcard blocks with named host matchers. When a service uses a `@<tag> host <domain>` matcher (e.g. `@dreeve-zwift host dreeve-zwift.example.com`), its initial display name is derived from the `@` tag in Title/Camel words (`Dreeve Zwift`). You can also optionally annotate blocks with `# @name`, `# @category`, and `# @icon` comments:
 
 ```caddyfile
 # @name Jellyfin Media
@@ -111,12 +111,10 @@ pve.example.com {
     }
 }
 
-# Wildcard block with named matchers
+# Wildcard block with named matchers (@dreeve-zwift -> initial name "Dreeve Zwift")
 *.example.com {
-    # @name Sonarr
-    # @category Media
-    @sonarr host sonarr.example.com
-    handle @sonarr {
+    @dreeve-zwift host dreeve-zwift.example.com
+    handle @dreeve-zwift {
         reverse_proxy 192.168.1.30:8989
     }
 }

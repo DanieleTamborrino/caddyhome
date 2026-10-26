@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CaddyHome</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate icon" href="/favicon.ico" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
@@ -17,12 +19,16 @@
       --bg-surface: rgba(15, 23, 42, 0.82);
       --bg-card: rgba(15, 23, 42, 0.78);
       --bg-card-hover: rgba(30, 41, 59, 0.92);
+      --bg-input: rgba(0, 0, 0, 0.25);
+      --bg-chip: rgba(255, 255, 255, 0.06);
       --border-card: rgba(51, 65, 85, 0.65);
       --border-hover: rgba(56, 189, 248, 0.55);
       --text-primary: #f1f5f9;
       --text-muted: #94a3b8;
       --accent: #38bdf8;
       --accent-soft: rgba(56, 189, 248, 0.14);
+      --warning: #fbbf24;
+      --warning-soft: rgba(245, 158, 11, 0.18);
     }
 
     [data-theme="light"] {
@@ -31,12 +37,16 @@
       --bg-surface: rgba(255, 255, 255, 0.88);
       --bg-card: rgba(255, 255, 255, 0.85);
       --bg-card-hover: rgba(248, 250, 252, 0.98);
+      --bg-input: rgba(241, 245, 249, 0.9);
+      --bg-chip: rgba(15, 23, 42, 0.06);
       --border-card: rgba(203, 213, 225, 0.9);
       --border-hover: rgba(2, 132, 199, 0.65);
       --text-primary: #0f172a;
       --text-muted: #64748b;
       --accent: #0284c7;
       --accent-soft: rgba(2, 132, 199, 0.12);
+      --warning: #b45309;
+      --warning-soft: rgba(217, 119, 6, 0.14);
     }
 
     [data-theme="oled"] {
@@ -45,12 +55,16 @@
       --bg-surface: rgba(10, 10, 10, 0.88);
       --bg-card: rgba(12, 12, 14, 0.88);
       --bg-card-hover: rgba(24, 24, 27, 0.96);
+      --bg-input: rgba(24, 24, 27, 0.7);
+      --bg-chip: rgba(255, 255, 255, 0.07);
       --border-card: rgba(39, 39, 42, 0.85);
       --border-hover: rgba(34, 211, 238, 0.6);
       --text-primary: #fafafa;
       --text-muted: #a1a1aa;
       --accent: #22d3ee;
       --accent-soft: rgba(34, 211, 238, 0.14);
+      --warning: #fbbf24;
+      --warning-soft: rgba(245, 158, 11, 0.18);
     }
 
     [data-theme="nord"] {
@@ -59,12 +73,16 @@
       --bg-surface: rgba(59, 66, 82, 0.86);
       --bg-card: rgba(59, 66, 82, 0.82);
       --bg-card-hover: rgba(67, 76, 94, 0.95);
+      --bg-input: rgba(46, 52, 64, 0.65);
+      --bg-chip: rgba(236, 239, 244, 0.08);
       --border-card: rgba(76, 86, 106, 0.85);
       --border-hover: rgba(136, 192, 208, 0.65);
       --text-primary: #eceff4;
       --text-muted: #d8dee9;
       --accent: #88c0d0;
       --accent-soft: rgba(136, 192, 208, 0.16);
+      --warning: #ebcb8b;
+      --warning-soft: rgba(235, 203, 139, 0.18);
     }
 
     [data-theme="catppuccin"] {
@@ -73,12 +91,16 @@
       --bg-surface: rgba(24, 24, 37, 0.86);
       --bg-card: rgba(49, 50, 68, 0.78);
       --bg-card-hover: rgba(69, 71, 90, 0.92);
+      --bg-input: rgba(24, 24, 37, 0.65);
+      --bg-chip: rgba(205, 214, 244, 0.08);
       --border-card: rgba(88, 91, 112, 0.65);
       --border-hover: rgba(203, 166, 247, 0.65);
       --text-primary: #cdd6f4;
       --text-muted: #a6adc8;
       --accent: #cba6f7;
       --accent-soft: rgba(203, 166, 247, 0.16);
+      --warning: #f9e2af;
+      --warning-soft: rgba(249, 226, 175, 0.18);
     }
 
     body {
@@ -106,14 +128,44 @@
       transform: translateY(-2px);
     }
 
+    .theme-input {
+      background-color: var(--bg-input);
+      border-color: var(--border-card);
+      color: var(--text-primary);
+    }
+
+    .theme-input option {
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+    }
+
+    .theme-chip {
+      background-color: var(--bg-chip);
+      border-color: var(--border-card);
+    }
+
     .theme-muted {
       color: var(--text-muted);
+    }
+
+    .theme-accent-text {
+      color: var(--accent);
     }
 
     .theme-accent-badge {
       background-color: var(--accent-soft);
       color: var(--accent);
       border: 1px solid var(--border-hover);
+    }
+
+    .theme-warn-text {
+      color: var(--warning);
+    }
+
+    .theme-warn-badge {
+      background-color: var(--warning-soft);
+      color: var(--warning);
+      border-color: var(--warning) !important;
     }
 
     .sortable-ghost {
@@ -143,11 +195,7 @@
 
         <!-- Brand & Active Count -->
         <div class="flex items-center gap-3">
-          <div class="w-9 h-9 rounded-xl flex items-center justify-center theme-accent-badge font-bold text-lg shadow-sm">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-            </svg>
-          </div>
+          <img src="/favicon.svg" alt="CaddyHome Logo" class="w-9 h-9 rounded-xl shadow-sm select-none shrink-0" />
           <div>
             <div class="flex items-center gap-2">
               <h1 class="text-lg font-bold tracking-tight" x-text="state.settings.title || 'CaddyHome'"></h1>
@@ -156,7 +204,7 @@
             </div>
             <p class="text-xs theme-muted hidden sm:block">
               <span x-show="!lanMode">Click principale: <strong>HTTPS Esterno</strong></span>
-              <span x-show="lanMode" class="text-amber-400 font-medium">Modalità click: <strong>IP LAN Diretto</strong></span>
+              <span x-show="lanMode" class="theme-warn-text font-medium">Modalità click: <strong>IP LAN Diretto</strong></span>
             </p>
           </div>
         </div>
@@ -173,10 +221,9 @@
               @keydown.escape="searchQuery = ''; $el.blur()"
               type="text"
               placeholder="Cerca servizio, dominio o IP:Porta... (premi /)"
-              class="w-full pl-10 pr-10 py-1.5 text-sm rounded-xl border bg-black/20 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
-              style="border-color: var(--border-card); color: var(--text-primary);"
+              class="w-full pl-10 pr-10 py-1.5 text-sm rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500/60"
             />
-            <button x-show="searchQuery" @click="searchQuery = ''" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs theme-muted hover: opacity-80">
+            <button x-show="searchQuery" @click="searchQuery = ''" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs theme-muted hover:opacity-80">
               ✕
             </button>
           </div>
@@ -188,8 +235,9 @@
           <!-- Global LAN Mode Toggle -->
           <button
             @click="toggleLanMode()"
-            :class="lanMode ? 'bg-amber-500/20 border-amber-500/60 text-amber-300' : 'border-slate-700/70 opacity-85 hover:opacity-100'"
+            :class="lanMode ? 'theme-warn-badge' : 'opacity-85 hover:opacity-100'"
             class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition"
+            style="border-color: var(--border-card);"
             title="Commuta click principale tra dominio HTTPS esterno e IP LAN diretto">
             <span class="w-2 h-2 rounded-full" :class="lanMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'"></span>
             <span x-text="lanMode ? 'LAN ON' : 'HTTPS'"></span>
@@ -213,7 +261,7 @@
             class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 hover:opacity-90 transition disabled:opacity-50"
             style="border-color: var(--border-card);"
             title="Sincronizza ora con Caddy">
-            <svg class="w-4 h-4" :class="syncing ? 'animate-spin text-sky-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" :class="syncing ? 'animate-spin theme-accent-text' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
             <span class="hidden sm:inline">Sync</span>
@@ -222,7 +270,7 @@
           <!-- Edit / Save Layout Button -->
           <button
             @click="toggleEditMode()"
-            :class="editMode ? 'bg-emerald-500 text-slate-950 font-semibold border-emerald-400' : 'border-slate-700/70'"
+            :class="editMode ? 'bg-emerald-500 text-slate-950 font-semibold border-emerald-400' : ''"
             class="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition"
             style="border-color: var(--border-card);">
             <svg x-show="!editMode" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -240,14 +288,14 @@
       <div x-show="editMode" x-cloak class="border-t bg-sky-500/10 px-4 sm:px-6 lg:px-8 py-2" style="border-color: var(--border-card);">
         <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs">
           <div class="flex items-center gap-2">
-            <span class="font-medium text-sky-400">Modalità Modifica attiva:</span>
+            <span class="font-medium theme-accent-text">Modalità Modifica attiva:</span>
             <span class="theme-muted">Trascina le card o le categorie per riordinarle, oppure clicca una card per modificarla.</span>
           </div>
           <div class="flex items-center gap-2">
             <button
-              @click="showHidden = !showHidden"
+              @click="toggleShowHidden()"
               class="px-2.5 py-1 rounded-lg border transition"
-              :class="showHidden ? 'bg-amber-500/20 border-amber-400 text-amber-300' : 'opacity-75'"
+              :class="showHidden ? 'theme-warn-badge' : 'opacity-75'"
               style="border-color: var(--border-card);">
               <span x-text="showHidden ? 'Nascondi servizi occultati' : 'Mostra servizi nascosti (' + hiddenServiceCount() + ')'"></span>
             </button>
@@ -292,7 +340,7 @@
 
       <!-- Categories Container (Sortable in Edit Mode) -->
       <div id="categories-root" class="space-y-8">
-        <template x-for="cat in sortedCategories()" :key="cat.id">
+        <template x-for="cat in sortedCategories()" :key="cat.id + '-' + renderKey">
           <section
             :data-category-id="cat.id"
             x-show="editMode || servicesForCategory(cat.id).length > 0"
@@ -301,11 +349,11 @@
             <!-- Category Header -->
             <div class="flex items-center justify-between border-b pb-2" style="border-color: var(--border-card);">
               <div class="flex items-center gap-2">
-                <span x-show="editMode" class="cat-drag-handle cursor-grab active:cursor-grabbing p-1 rounded hover:bg-white/10 theme-muted" title="Trascina categoria">
+                <span x-show="editMode" class="cat-drag-handle cursor-grab active:cursor-grabbing p-1 rounded hover:opacity-80 theme-muted" title="Trascina categoria">
                   ⋮⋮
                 </span>
                 <h2 class="text-sm font-semibold uppercase tracking-wider theme-muted" x-text="cat.name"></h2>
-                <span class="text-xs px-2 py-0.5 rounded-full bg-white/5 theme-muted"
+                <span class="text-xs px-2 py-0.5 rounded-full theme-chip theme-muted"
                       x-text="servicesForCategory(cat.id).length"></span>
               </div>
 
@@ -313,7 +361,7 @@
               <div x-show="editMode" class="flex items-center gap-1.5">
                 <button
                   @click="openCategoryModal(cat)"
-                  class="text-xs px-2 py-1 rounded-lg border hover:bg-white/5 theme-muted"
+                  class="text-xs px-2 py-1 rounded-lg border hover:opacity-80 theme-muted"
                   style="border-color: var(--border-card);">
                   Rinomina
                 </button>
@@ -329,10 +377,10 @@
             <!-- Category Cards Grid -->
             <div
               class="service-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 min-h-[56px]"
-              :class="editMode ? 'p-2 rounded-2xl border border-dashed border-slate-700/60' : ''"
+              :class="editMode ? 'p-2 rounded-2xl border border-dashed border-slate-500/40' : ''"
               :data-category-id="cat.id">
 
-              <template x-for="svc in servicesForCategory(cat.id)" :key="svc.domain">
+              <template x-for="svc in servicesForCategory(cat.id)" :key="svc.domain + '-' + renderKey">
                 <div
                   :data-domain="svc.domain"
                   @click="handleCardClick(svc)"
@@ -344,10 +392,10 @@
 
                   <!-- Top Row: Icon + Name + Domain + Edit Button -->
                   <div class="flex items-start gap-3.5">
-                    <div class="w-11 h-11 rounded-xl bg-black/20 border flex items-center justify-center shrink-0 overflow-hidden p-1.5"
-                         style="border-color: var(--border-card);">
+                    <div class="w-11 h-11 rounded-xl theme-input border flex items-center justify-center shrink-0 overflow-hidden p-1.5">
                       <img
                         :src="getIconUrl(svc)"
+                        @load="$event.target.dataset.lastIconKey = getIconKey(svc)"
                         @error="handleIconError($event, svc)"
                         :alt="svc.custom_name"
                         loading="lazy"
@@ -364,7 +412,7 @@
                         <button
                           x-show="editMode"
                           @click.stop="openServiceModal(svc)"
-                          class="p-1 rounded-lg hover:bg-white/10 text-sky-400 shrink-0"
+                          class="p-1 rounded-lg hover:bg-sky-500/10 theme-accent-text shrink-0"
                           title="Modifica servizio">
                           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
@@ -372,7 +420,7 @@
                         </button>
                       </div>
                       <p class="text-xs theme-muted truncate" x-text="svc.domain"></p>
-                      <span x-show="svc.hidden" class="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                      <span x-show="svc.hidden" class="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded theme-warn-badge">
                         Nascosto
                       </span>
                     </div>
@@ -390,8 +438,7 @@
                           target="_blank"
                           rel="noopener noreferrer"
                           @click.stop
-                          class="px-2 py-0.5 rounded-lg bg-black/25 hover:bg-sky-500/20 hover:text-sky-300 border text-[11px] font-mono truncate transition flex items-center gap-1"
-                          style="border-color: var(--border-card);"
+                          class="px-2 py-0.5 rounded-lg theme-chip hover:bg-sky-500/20 hover:text-sky-400 border text-[11px] font-mono truncate transition flex items-center gap-1"
                           :title="'Apri direttamente in LAN: ' + getLanUrl(svc)">
                           <span>LAN</span>
                           <span class="opacity-80" x-text="formatUpstreamLabel(getLanUrl(svc))"></span>
@@ -403,7 +450,7 @@
                         <div class="relative" x-data="{ openUp: false }">
                           <button
                             @click.stop="openUp = !openUp"
-                            class="px-1.5 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-mono theme-muted"
+                            class="px-1.5 py-0.5 rounded-lg theme-chip hover:opacity-80 text-[10px] font-mono theme-muted"
                             :title="'Altri upstream (' + (svc.upstreams.length - 1) + ')'">
                             +<span x-text="svc.upstreams.length - 1"></span>
                           </button>
@@ -465,16 +512,14 @@
         <div>
           <label class="block font-medium mb-1">Nome Visualizzato</label>
           <input type="text" x-model="serviceModal.form.custom_name"
-                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                 style="border-color: var(--border-card);" />
+                 class="w-full px-3 py-2 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500" />
         </div>
 
         <!-- Category Select -->
         <div>
           <label class="block font-medium mb-1">Categoria</label>
           <select x-model="serviceModal.form.category_id"
-                  class="w-full px-3 py-2 rounded-xl border bg-slate-900 text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  style="border-color: var(--border-card);">
+                  class="w-full px-3 py-2 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500">
             <template x-for="cat in sortedCategories()" :key="cat.id">
               <option :value="cat.id" x-text="cat.name"></option>
             </template>
@@ -487,15 +532,15 @@
             <label class="font-medium">Logo / Icona (vuoto = Favicon automatico del link)</label>
             <button type="button"
                     @click="serviceModal.form.icon = ''"
-                    class="text-[11px] text-sky-400 hover:underline">
+                    class="text-[11px] theme-accent-text hover:underline">
               Usa Favicon automatico
             </button>
           </div>
 
           <div class="flex items-center gap-3">
-            <div class="w-12 h-12 rounded-xl border bg-black/25 p-1.5 flex items-center justify-center shrink-0 overflow-hidden"
-                 style="border-color: var(--border-card);">
+            <div class="w-12 h-12 rounded-xl border theme-input p-1.5 flex items-center justify-center shrink-0 overflow-hidden">
               <img :src="getIconUrl(serviceModal.form)"
+                   @load="$event.target.dataset.lastIconKey = getIconKey(serviceModal.form)"
                    @error="handleIconError($event, serviceModal.form)"
                    class="w-full h-full object-contain" />
             </div>
@@ -503,12 +548,11 @@
               <input type="text"
                      x-model="serviceModal.form.icon"
                      placeholder="Lascia vuoto per favicon, oppure incolla URL / carica file..."
-                     class="w-full px-3 py-1.5 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                     style="border-color: var(--border-card);" />
+                     class="w-full px-3 py-1.5 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500" />
 
               <div class="flex flex-wrap items-center gap-2">
                 <!-- Upload Custom Image File -->
-                <label class="px-2.5 py-1 rounded-lg border cursor-pointer hover:bg-white/5 transition inline-flex items-center gap-1"
+                <label class="px-2.5 py-1 rounded-lg border cursor-pointer hover:opacity-80 transition inline-flex items-center gap-1"
                        style="border-color: var(--border-card);">
                   <span>Carica immagine...</span>
                   <input type="file" accept="image/*" class="hidden" @change="uploadServiceIcon($event)" />
@@ -519,11 +563,10 @@
                   <input type="text"
                          x-model="serviceModal.iconSlug"
                          placeholder="Slug dashboard-icons (es. jellyfin)"
-                         class="w-full px-2 py-1 rounded-lg border bg-black/20 text-[11px]"
-                         style="border-color: var(--border-card);" />
+                         class="w-full px-2 py-1 rounded-lg border theme-input text-[11px]" />
                   <button type="button"
                           @click="applyDashboardIconSlug()"
-                          class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] shrink-0">
+                          class="px-2 py-1 rounded-lg theme-chip border hover:opacity-80 text-[11px] shrink-0">
                     Applica
                   </button>
                 </div>
@@ -538,8 +581,7 @@
           <input type="text"
                  x-model="serviceModal.form.override_lan_url"
                  :placeholder="(serviceModal.form.upstreams && serviceModal.form.upstreams[0]) || 'http://192.168.1.50:8080'"
-                 class="w-full px-3 py-2 rounded-xl border bg-black/25 font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
-                 style="border-color: var(--border-card);" />
+                 class="w-full px-3 py-2 rounded-xl border theme-input font-mono focus:outline-none focus:ring-2 focus:ring-sky-500" />
         </div>
 
         <!-- Hidden Toggle -->
@@ -592,8 +634,7 @@
                x-model="categoryModal.name"
                @keydown.enter="saveCategoryModal()"
                placeholder="es. Media & Streaming"
-               class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
-               style="border-color: var(--border-card);" />
+               class="w-full px-3 py-2 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500" />
       </div>
 
       <div class="flex justify-end gap-2 pt-3 border-t" style="border-color: var(--border-card);">
@@ -610,12 +651,12 @@
   <!-- 3. THEME & APPEARANCE MODAL -->
   <div x-show="appearanceModal.open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-       @keydown.escape.window="appearanceModal.open = false">
-    <div @click.outside="appearanceModal.open = false"
+       @keydown.escape.window="closeAppearanceModal()">
+    <div @click.outside="closeAppearanceModal()"
          class="w-full max-w-lg rounded-2xl border p-6 shadow-2xl theme-surface space-y-4 max-h-[90vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b pb-3" style="border-color: var(--border-card);">
         <h3 class="text-base font-bold">Tema, Sfondo & Impostazioni</h3>
-        <button @click="appearanceModal.open = false" class="theme-muted">✕</button>
+        <button @click="closeAppearanceModal()" class="theme-muted hover:opacity-80">✕</button>
       </div>
 
       <div class="space-y-4 text-xs">
@@ -623,8 +664,7 @@
         <div>
           <label class="block font-medium mb-1">Titolo Dashboard</label>
           <input type="text" x-model="appearanceModal.form.title"
-                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                 style="border-color: var(--border-card);" />
+                 class="w-full px-3 py-2 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500" />
         </div>
 
         <!-- Color Theme Preset -->
@@ -638,7 +678,7 @@
                 :class="appearanceModal.form.theme === t.id ? 'ring-2 ring-sky-400 border-sky-400' : 'opacity-80 hover:opacity-100'"
                 class="p-2.5 rounded-xl border text-center transition flex flex-col items-center gap-1.5"
                 style="border-color: var(--border-card);">
-                <span class="w-6 h-6 rounded-full border border-white/20 shadow-inner" :style="`background: ${t.preview}`"></span>
+                <span class="w-6 h-6 rounded-full border border-slate-400/30 shadow-inner" :style="`background: ${t.preview}`"></span>
                 <span class="font-medium text-[11px]" x-text="t.label"></span>
               </button>
             </template>
@@ -660,10 +700,9 @@
           <input type="text"
                  x-model="appearanceModal.form.background_image"
                  placeholder="URL immagine (https://... o /uploads/...) oppure carica dal PC"
-                 class="w-full px-3 py-2 rounded-xl border bg-black/25 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                 style="border-color: var(--border-card);" />
+                 class="w-full px-3 py-2 rounded-xl border theme-input focus:outline-none focus:ring-2 focus:ring-sky-500" />
           <div class="flex items-center justify-between gap-2">
-            <label class="px-3 py-1.5 rounded-xl border cursor-pointer hover:bg-white/5 transition inline-flex items-center gap-1.5"
+            <label class="px-3 py-1.5 rounded-xl border cursor-pointer hover:opacity-80 transition inline-flex items-center gap-1.5"
                    style="border-color: var(--border-card);">
               <span>Carica file sfondo...</span>
               <input type="file" accept="image/*" class="hidden" @change="uploadBackgroundImage($event)" />
@@ -680,7 +719,7 @@
       </div>
 
       <div class="flex justify-end gap-2 pt-4 border-t" style="border-color: var(--border-card);">
-        <button @click="appearanceModal.open = false; applyTheme(state.settings.theme)"
+        <button @click="closeAppearanceModal()"
                 class="px-3 py-2 rounded-xl border text-xs"
                 style="border-color: var(--border-card);">
           Annulla
@@ -722,6 +761,7 @@
         syncing: false,
         toastMessage: "",
         sortableInstances: [],
+        renderKey: 0,
 
         themes: [
           { id: "dark", label: "Dark", preview: "#0f172a" },
@@ -802,6 +842,10 @@
             if (!res.ok) throw new Error("HTTP " + res.status);
             this.state = await res.json();
             this.applyTheme(this.state.settings?.theme);
+            this.renderKey++;
+            if (this.editMode) {
+              this.$nextTick(() => this.initSortable());
+            }
             this.showToast("Sincronizzazione con Caddy completata");
           } catch (err) {
             console.error("Sync failed:", err);
@@ -831,6 +875,14 @@
         toggleLanMode() {
           this.lanMode = !this.lanMode;
           localStorage.setItem("caddyhome_lan_mode", String(this.lanMode));
+        },
+
+        toggleShowHidden() {
+          this.showHidden = !this.showHidden;
+          if (this.editMode) {
+            this.renderKey++;
+            this.$nextTick(() => this.initSortable());
+          }
         },
 
         activeServiceCount() {
@@ -871,7 +923,7 @@
           if (svc.upstreams && svc.upstreams.length > 0) {
             return svc.upstreams[0];
           }
-          return svc.external_url || "";
+          return "";
         },
 
         getPrimaryUrl(svc) {
@@ -894,13 +946,24 @@
           return base.replace(/\/+$/, "") + "/favicon.ico";
         },
 
+        getIconKey(svc) {
+          return this.getIconUrl(svc) + "|" + this.getLanUrl(svc);
+        },
+
         handleIconError(event, svc) {
           const img = event.target;
+          const expectedPrimary = this.getIconUrl(svc);
+          const expectedKey = this.getIconKey(svc);
+          if (img.dataset.lastIconKey !== expectedKey) {
+            img.dataset.lastIconKey = expectedKey;
+            delete img.dataset.triedLan;
+          }
           const lanBase = this.getLanUrl(svc);
+          const lanFavicon = lanBase ? (lanBase.replace(/\/+$/, "") + "/favicon.ico") : "";
           // If external favicon failed and LAN URL is different, try LAN favicon once before SVG fallback
-          if (!img.dataset.triedLan && lanBase && (!svc.icon || svc.icon.trim() === "")) {
+          if (!img.dataset.triedLan && lanFavicon && lanFavicon !== expectedPrimary && (!svc.icon || svc.icon.trim() === "")) {
             img.dataset.triedLan = "1";
-            img.src = lanBase.replace(/\/+$/, "") + "/favicon.ico";
+            img.src = lanFavicon;
             return;
           }
           if (img.src !== FALLBACK_ICON_SVG) {
@@ -932,6 +995,7 @@
             this.syncOrderFromDOM();
             this.destroySortable();
             this.editMode = false;
+            this.renderKey++;
             this.persistState("Layout salvato");
           }
         },
@@ -943,9 +1007,14 @@
             this.sortableInstances.push(
               new Sortable(catRoot, {
                 animation: 150,
+                draggable: "section[data-category-id]",
                 handle: ".cat-drag-handle",
                 ghostClass: "sortable-ghost",
-                onEnd: () => this.syncOrderFromDOM()
+                onEnd: () => {
+                  this.syncOrderFromDOM();
+                  this.renderKey++;
+                  this.$nextTick(() => this.initSortable());
+                }
               })
             );
           }
@@ -954,8 +1023,13 @@
               new Sortable(grid, {
                 group: "services",
                 animation: 150,
+                draggable: "[data-domain]",
                 ghostClass: "sortable-ghost",
-                onEnd: () => this.syncOrderFromDOM()
+                onEnd: () => {
+                  this.syncOrderFromDOM();
+                  this.renderKey++;
+                  this.$nextTick(() => this.initSortable());
+                }
               })
             );
           });
@@ -975,20 +1049,49 @@
             if (catObj) catObj.order = idx;
           });
 
-          // 2. Sync service cards category_id & order from DOM
+          // 2. Two-pass sync for service cards:
+          // Pass 1: Update category_id & order for all rendered cards across all grids
           const grids = document.querySelectorAll(".service-grid[data-category-id]");
+          const seenDomains = new Set();
+          const gridCardCounts = new Map();
           grids.forEach(grid => {
             const catId = grid.getAttribute("data-category-id");
             const cards = grid.querySelectorAll("[data-domain]");
+            gridCardCounts.set(catId, cards.length);
             cards.forEach((card, idx) => {
               const domain = card.getAttribute("data-domain");
               const svc = this.state.services?.[domain];
               if (svc) {
                 svc.category_id = catId;
                 svc.order = idx;
+                seenDomains.add(domain);
               }
             });
           });
+
+          // Pass 2: Preserve relative order of non-rendered (hidden/search-filtered) cards per category
+          (this.state.categories || []).forEach(cat => {
+            const catId = cat.id;
+            let nextOrd = gridCardCounts.get(catId) ?? 0;
+            Object.values(this.state.services || {})
+              .filter(s => s && (s.category_id || "cat_uncat") === catId && !seenDomains.has(s.domain))
+              .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+              .forEach(s => {
+                s.order = nextOrd++;
+              });
+          });
+        },
+
+        nextServiceOrderInCategory(catId, excludeDomain = "") {
+          let next = 0;
+          Object.values(this.state.services || {}).forEach(svc => {
+            if (svc && svc.domain !== excludeDomain && (svc.category_id || "cat_uncat") === catId) {
+              if ((svc.order ?? 0) >= next) {
+                next = (svc.order ?? 0) + 1;
+              }
+            }
+          });
+          return next;
         },
 
         openServiceModal(svc) {
@@ -1059,13 +1162,20 @@
           const f = this.serviceModal.form;
           const target = this.state.services?.[f.domain];
           if (!target) return;
+          const newCatId = f.category_id || "cat_uncat";
           target.custom_name = f.custom_name.trim() || f.domain;
           target.icon = f.icon.trim();
-          target.category_id = f.category_id || "cat_uncat";
+          if ((target.category_id || "cat_uncat") !== newCatId) {
+            target.category_id = newCatId;
+            target.order = this.nextServiceOrderInCategory(newCatId, target.domain);
+          } else {
+            target.category_id = newCatId;
+          }
           target.override_lan_url = f.override_lan_url.trim() ? f.override_lan_url.trim() : null;
           target.hidden = Boolean(f.hidden);
           this.serviceModal.open = false;
           await this.persistState("Servizio aggiornato");
+          this.renderKey++;
           if (this.editMode) {
             this.$nextTick(() => this.initSortable());
           }
@@ -1076,6 +1186,10 @@
           delete this.state.services[domain];
           this.serviceModal.open = false;
           await this.persistState("Servizio eliminato");
+          this.renderKey++;
+          if (this.editMode) {
+            this.$nextTick(() => this.initSortable());
+          }
         },
 
         openCategoryModal(cat = null) {
@@ -1110,6 +1224,7 @@
           }
           this.categoryModal.open = false;
           await this.persistState("Categoria salvata");
+          this.renderKey++;
           if (this.editMode) {
             this.$nextTick(() => this.initSortable());
           }
@@ -1117,13 +1232,20 @@
 
         async deleteCategory(catId) {
           if (catId === "cat_uncat") return;
+          if (this.editMode) {
+            this.syncOrderFromDOM();
+          }
           this.state.categories = (this.state.categories || []).filter(c => c.id !== catId);
-          Object.values(this.state.services || {}).forEach(svc => {
-            if (svc && svc.category_id === catId) {
+          let nextOrd = this.nextServiceOrderInCategory("cat_uncat");
+          Object.values(this.state.services || {})
+            .filter(svc => svc && svc.category_id === catId)
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .forEach(svc => {
               svc.category_id = "cat_uncat";
-            }
-          });
+              svc.order = nextOrd++;
+            });
           await this.persistState("Categoria eliminata");
+          this.renderKey++;
           if (this.editMode) {
             this.$nextTick(() => this.initSortable());
           }
@@ -1136,6 +1258,11 @@
             this.appearanceModal.form.background_overlay_opacity = 0.75;
           }
           this.appearanceModal.open = true;
+        },
+
+        closeAppearanceModal() {
+          this.appearanceModal.open = false;
+          this.applyTheme(this.state.settings?.theme);
         },
 
         async saveAppearanceModal() {
